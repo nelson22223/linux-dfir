@@ -17,21 +17,24 @@ const (
 )
 
 type Process struct {
-	PID       int
-	PPID      int
-	UID       int
-	GID       int
-	Name      string
-	State     string
-	Cmdline   []string
-	Environ   map[string]string
-	Exe       string
-	Cwd       string
-	Root      string
-	Maps      MapsSummary
-	FDs       []FD
-	StatusRaw map[string]string
-	Issues    []ReadIssue
+	PID        int
+	PPID       int
+	UID        int
+	GID        int
+	Name       string
+	State      string
+	Stat       ProcessStat
+	Cmdline    []string
+	Environ    map[string]string
+	Exe        string
+	Cwd        string
+	Root       string
+	Maps       MapsSummary
+	FDs        []FD
+	Cgroups    []CgroupLine
+	Namespaces []NamespaceLink
+	StatusRaw  map[string]string
+	Issues     []ReadIssue
 }
 
 type ReadIssue struct {
@@ -58,6 +61,26 @@ type MapsSummary struct {
 	DeletedCount            int      `json:"deleted_count"`
 	SamplePaths             []string `json:"sample_paths,omitempty"`
 	AbsentReason            string   `json:"absent_reason,omitempty"`
+}
+
+type ProcessStat struct {
+	Pgrp           int
+	SessionID      int
+	TTYNr          int64
+	StartTimeTicks uint64
+}
+
+type CgroupLine struct {
+	HierarchyID string   `json:"hierarchy_id"`
+	Controllers []string `json:"controllers,omitempty"`
+	Path        string   `json:"path"`
+	Raw         string   `json:"raw"`
+}
+
+type NamespaceLink struct {
+	Type   string `json:"type"`
+	Target string `json:"target"`
+	Inode  string `json:"inode,omitempty"`
 }
 
 type FD struct {
@@ -94,6 +117,12 @@ func ReadProcess(root string, pid int) (Process, error) {
 		return Process{}, err
 	}
 	var issues []ReadIssue
+
+	statPath := filepath.Join(base, "stat")
+	stat, err := ReadProcessStat(statPath)
+	if err != nil {
+		issues = append(issues, readIssue(statPath, "stat", err))
+	}
 
 	cmdlinePath := filepath.Join(base, "cmdline")
 	cmdline, err := ReadNullSeparated(cmdlinePath)
@@ -135,22 +164,37 @@ func ReadProcess(root string, pid int) (Process, error) {
 	}
 	issues = append(issues, fdIssues...)
 
+	cgroupPath := filepath.Join(base, "cgroup")
+	cgroups, err := ReadCgroupLines(cgroupPath)
+	if err != nil {
+		issues = append(issues, readIssue(cgroupPath, "cgroup", err))
+	}
+
+	namespaces, nsIssues, err := ReadNamespaces(root, pid)
+	if err != nil {
+		issues = append(issues, readIssue(filepath.Join(base, "ns"), "namespace", err))
+	}
+	issues = append(issues, nsIssues...)
+
 	return Process{
-		PID:       pid,
-		PPID:      parseInt(status["PPid"]),
-		UID:       firstNumber(status["Uid"]),
-		GID:       firstNumber(status["Gid"]),
-		Name:      status["Name"],
-		State:     status["State"],
-		Cmdline:   cmdline,
-		Environ:   environ,
-		Exe:       exe,
-		Cwd:       cwd,
-		Root:      rootLink,
-		Maps:      maps,
-		FDs:       fds,
-		StatusRaw: status,
-		Issues:    issues,
+		PID:        pid,
+		PPID:       parseInt(status["PPid"]),
+		UID:        firstNumber(status["Uid"]),
+		GID:        firstNumber(status["Gid"]),
+		Name:       status["Name"],
+		State:      status["State"],
+		Stat:       stat,
+		Cmdline:    cmdline,
+		Environ:    environ,
+		Exe:        exe,
+		Cwd:        cwd,
+		Root:       rootLink,
+		Maps:       maps,
+		FDs:        fds,
+		Cgroups:    cgroups,
+		Namespaces: namespaces,
+		StatusRaw:  status,
+		Issues:     issues,
 	}, nil
 }
 
@@ -183,6 +227,89 @@ func ReadNullSeparated(path string) ([]string, error) {
 		}
 	}
 	return items, nil
+}
+
+func ReadProcessStat(path string) (ProcessStat, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ProcessStat{}, err
+	}
+	return ParseProcessStat(string(data))
+}
+
+func ParseProcessStat(text string) (ProcessStat, error) {
+	text = strings.TrimSpace(text)
+	closeParen := strings.LastIndex(text, ")")
+	if closeParen < 0 || closeParen+1 >= len(text) {
+		return ProcessStat{}, errors.New("malformed proc stat")
+	}
+	fields := strings.Fields(strings.TrimSpace(text[closeParen+1:]))
+	if len(fields) < 20 {
+		return ProcessStat{}, errors.New("short proc stat")
+	}
+	return ProcessStat{
+		Pgrp:           parseInt(fields[2]),
+		SessionID:      parseInt(fields[3]),
+		TTYNr:          parseInt64(fields[4]),
+		StartTimeTicks: parseUint64(fields[19]),
+	}, nil
+}
+
+func ReadCgroupLines(path string) ([]CgroupLine, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var lines []CgroupLine
+	for _, raw := range strings.Split(string(data), "\n") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		parts := strings.SplitN(raw, ":", 3)
+		if len(parts) != 3 {
+			lines = append(lines, CgroupLine{Raw: raw})
+			continue
+		}
+		controllers := []string{}
+		if parts[1] != "" {
+			controllers = strings.Split(parts[1], ",")
+		}
+		lines = append(lines, CgroupLine{
+			HierarchyID: parts[0],
+			Controllers: controllers,
+			Path:        parts[2],
+			Raw:         raw,
+		})
+	}
+	return lines, nil
+}
+
+func ReadNamespaces(root string, pid int) ([]NamespaceLink, []ReadIssue, error) {
+	nsDir := filepath.Join(root, strconv.Itoa(pid), "ns")
+	entries, err := os.ReadDir(nsDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	namespaces := make([]NamespaceLink, 0, len(entries))
+	issues := []ReadIssue{}
+	for _, entry := range entries {
+		nsPath := filepath.Join(nsDir, entry.Name())
+		target, err := os.Readlink(nsPath)
+		if err != nil {
+			issues = append(issues, readIssue(nsPath, "namespace_entry", err))
+			continue
+		}
+		namespaces = append(namespaces, NamespaceLink{
+			Type:   entry.Name(),
+			Target: target,
+			Inode:  NamespaceInode(target),
+		})
+	}
+	sort.Slice(namespaces, func(i, j int) bool {
+		return namespaces[i].Type < namespaces[j].Type
+	})
+	return namespaces, issues, nil
 }
 
 func RedactEnviron(items []string) map[string]string {
@@ -327,6 +454,15 @@ func readIssue(path, kind string, err error) ReadIssue {
 	}
 }
 
+func NamespaceInode(target string) string {
+	start := strings.IndexByte(target, '[')
+	end := strings.IndexByte(target, ']')
+	if start >= 0 && end > start {
+		return target[start+1 : end]
+	}
+	return ""
+}
+
 func isRaceError(err error) bool {
 	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH)
 }
@@ -342,4 +478,22 @@ func parseInt(value string) int {
 
 func firstNumber(value string) int {
 	return parseInt(value)
+}
+
+func parseInt64(value string) int64 {
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return 0
+	}
+	parsed, _ := strconv.ParseInt(fields[0], 10, 64)
+	return parsed
+}
+
+func parseUint64(value string) uint64 {
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return 0
+	}
+	parsed, _ := strconv.ParseUint(fields[0], 10, 64)
+	return parsed
 }

@@ -8,15 +8,19 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"linux-dfir/internal/collectors/common"
 	"linux-dfir/internal/evidence"
+	"linux-dfir/internal/integrity"
 	"linux-dfir/internal/output"
 	"linux-dfir/internal/procfs"
 	"linux-dfir/internal/redact"
 )
 
 var procRoot = "/proc"
+
+const processLineageRel = "facts/process_lineage.jsonl"
 
 type ProcessRecord struct {
 	evidence.RecordMeta
@@ -85,6 +89,40 @@ type Entity struct {
 	Path       string `json:"path,omitempty"`
 }
 
+type ProcessLineageRecord struct {
+	evidence.RecordMeta
+	EntityType       string                 `json:"entity_type"`
+	EntityID         string                 `json:"entity_id"`
+	Exists           bool                   `json:"exists"`
+	PID              int                    `json:"pid"`
+	PPID             int                    `json:"ppid"`
+	ProcessName      string                 `json:"process_name"`
+	State            string                 `json:"state"`
+	UID              int                    `json:"uid"`
+	GID              int                    `json:"gid"`
+	Cmdline          []string               `json:"cmdline,omitempty"`
+	EnvSummary       procfs.EnvironSummary  `json:"env_summary"`
+	Exe              string                 `json:"exe,omitempty"`
+	Cwd              string                 `json:"cwd,omitempty"`
+	Root             string                 `json:"root,omitempty"`
+	StartTimeTicks   uint64                 `json:"start_time_ticks,omitempty"`
+	ProcessSessionID int                    `json:"process_session_id,omitempty"`
+	Pgrp             int                    `json:"pgrp,omitempty"`
+	TTYNr            int64                  `json:"tty_nr,omitempty"`
+	TTY              string                 `json:"tty,omitempty"`
+	TerminalHint     string                 `json:"terminal_hint,omitempty"`
+	ExeSHA256        string                 `json:"exe_sha256,omitempty"`
+	ExeSize          *int64                 `json:"exe_size,omitempty"`
+	ExeMode          string                 `json:"exe_mode,omitempty"`
+	PackageOwner     string                 `json:"package_owner,omitempty"`
+	CgroupLines      []procfs.CgroupLine    `json:"cgroup_lines,omitempty"`
+	Namespaces       []procfs.NamespaceLink `json:"namespaces,omitempty"`
+	LineageKey       string                 `json:"lineage_key"`
+	ParentKey        string                 `json:"parent_key,omitempty"`
+	Issues           []procfs.ReadIssue     `json:"issues,omitempty"`
+	Sources          []evidence.SourceRef   `json:"sources,omitempty"`
+}
+
 func Collect(ctx context.Context, out *output.Manager) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -134,6 +172,9 @@ func Collect(ctx context.Context, out *output.Manager) error {
 		}
 	}
 
+	if err := writeProcessLineage(out, processes); err != nil {
+		return err
+	}
 	if err := writeLegacy(out, processes); err != nil {
 		return err
 	}
@@ -216,6 +257,157 @@ func writeProcess(out *output.Manager, proc procfs.Process) error {
 		},
 	}
 	return out.AppendAIJSONL("entities/process.jsonl", record, "process", sourcePath, "procfs", "high")
+}
+
+func writeProcessLineage(out *output.Manager, processes []procfs.Process) error {
+	sort.Slice(processes, func(i, j int) bool { return processes[i].PID < processes[j].PID })
+	keys := make(map[int]string, len(processes))
+	for _, proc := range processes {
+		keys[proc.PID] = lineageKey(proc)
+	}
+	for _, proc := range processes {
+		record, extraIssues := processLineageRecord(out, proc, keys)
+		for _, issue := range extraIssues {
+			if issue.IsRace {
+				continue
+			}
+			_ = out.Error(evidence.ErrorEvent{
+				Collector:      "process",
+				Error:          issue.Error,
+				SourcePath:     issue.Path,
+				SourceType:     sourceTypeForLineageIssue(issue),
+				SourceTrust:    "high",
+				RawArtifactRef: "ai/" + processLineageRel,
+			})
+		}
+		if err := out.AppendAIJSONL(processLineageRel, record, "process", filepath.Join(procRoot, fmt.Sprint(proc.PID)), "procfs", "high"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func processLineageRecord(out *output.Manager, proc procfs.Process, keys map[int]string) (ProcessLineageRecord, []procfs.ReadIssue) {
+	sourcePath := filepath.Join(procRoot, fmt.Sprint(proc.PID))
+	exeLinkPath := filepath.Join(sourcePath, "exe")
+	exeMeta, exeIssues := collectExeMetadata(exeLinkPath)
+	tty := terminalHint(proc.FDs)
+	parentKey := keys[proc.PPID]
+	if parentKey == "" && proc.PPID > 0 {
+		parentKey = fmt.Sprintf("pid:%d", proc.PPID)
+	}
+	issues := make([]procfs.ReadIssue, 0, len(proc.Issues)+len(exeIssues))
+	issues = append(issues, proc.Issues...)
+	issues = append(issues, exeIssues...)
+	record := ProcessLineageRecord{
+		RecordMeta:       out.Meta("process", processLineageRel, sourcePath, "procfs", "high"),
+		EntityType:       "process_lineage",
+		EntityID:         fmt.Sprintf("process:%d", proc.PID),
+		Exists:           true,
+		PID:              proc.PID,
+		PPID:             proc.PPID,
+		ProcessName:      proc.Name,
+		State:            proc.State,
+		UID:              proc.UID,
+		GID:              proc.GID,
+		Cmdline:          redact.Args(proc.Cmdline),
+		EnvSummary:       procfs.SummarizeEnviron(proc.Environ),
+		Exe:              proc.Exe,
+		Cwd:              proc.Cwd,
+		Root:             proc.Root,
+		StartTimeTicks:   proc.Stat.StartTimeTicks,
+		ProcessSessionID: proc.Stat.SessionID,
+		Pgrp:             proc.Stat.Pgrp,
+		TTYNr:            proc.Stat.TTYNr,
+		TTY:              tty,
+		TerminalHint:     tty,
+		ExeSHA256:        exeMeta.SHA256,
+		ExeSize:          exeMeta.Size,
+		ExeMode:          exeMeta.Mode,
+		CgroupLines:      proc.Cgroups,
+		Namespaces:       proc.Namespaces,
+		LineageKey:       keys[proc.PID],
+		ParentKey:        parentKey,
+		Issues:           issues,
+		Sources: []evidence.SourceRef{
+			{SourcePath: filepath.Join(sourcePath, "status"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
+			{SourcePath: filepath.Join(sourcePath, "stat"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
+			{SourcePath: filepath.Join(sourcePath, "cmdline"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
+			{SourcePath: filepath.Join(sourcePath, "environ"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
+			{SourcePath: filepath.Join(sourcePath, "exe"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
+			{SourcePath: filepath.Join(sourcePath, "cwd"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
+			{SourcePath: filepath.Join(sourcePath, "root"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
+			{SourcePath: filepath.Join(sourcePath, "cgroup"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
+			{SourcePath: filepath.Join(sourcePath, "ns"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
+		},
+	}
+	return record, exeIssues
+}
+
+type exeMetadata struct {
+	SHA256 string
+	Size   *int64
+	Mode   string
+}
+
+func collectExeMetadata(exeLinkPath string) (exeMetadata, []procfs.ReadIssue) {
+	if exeLinkPath == "" {
+		return exeMetadata{}, nil
+	}
+	issues := []procfs.ReadIssue{}
+	info, err := os.Stat(exeLinkPath)
+	if err != nil {
+		return exeMetadata{}, []procfs.ReadIssue{lineageReadIssue(exeLinkPath, "exe_metadata", err)}
+	}
+	size := info.Size()
+	meta := exeMetadata{
+		Size: &size,
+		Mode: info.Mode().String(),
+	}
+	hash, err := integrity.HashFile(exeLinkPath)
+	if err != nil {
+		issues = append(issues, lineageReadIssue(exeLinkPath, "exe_hash", err))
+		return meta, issues
+	}
+	meta.SHA256 = hash.SHA256
+	if meta.Size == nil {
+		meta.Size = &hash.Size
+	}
+	return meta, issues
+}
+
+func lineageReadIssue(path, kind string, err error) procfs.ReadIssue {
+	return procfs.ReadIssue{
+		Path:   path,
+		Kind:   kind,
+		Error:  err.Error(),
+		IsRace: errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH),
+	}
+}
+
+func lineageKey(proc procfs.Process) string {
+	if proc.Stat.StartTimeTicks > 0 {
+		return fmt.Sprintf("pid:%d:start_ticks:%d", proc.PID, proc.Stat.StartTimeTicks)
+	}
+	return fmt.Sprintf("pid:%d", proc.PID)
+}
+
+func terminalHint(fds []procfs.FD) string {
+	for _, fd := range fds {
+		if strings.HasPrefix(fd.Target, "/dev/pts/") || strings.HasPrefix(fd.Target, "/dev/tty") {
+			return fd.Target
+		}
+	}
+	return ""
+}
+
+func sourceTypeForLineageIssue(issue procfs.ReadIssue) string {
+	switch issue.Kind {
+	case "exe_metadata", "exe_hash":
+		return "file"
+	default:
+		return "procfs"
+	}
 }
 
 func writeLegacy(out *output.Manager, processes []procfs.Process) error {

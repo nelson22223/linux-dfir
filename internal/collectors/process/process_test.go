@@ -2,7 +2,9 @@ package process
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"linux-dfir/internal/evidence"
 	"linux-dfir/internal/output"
+	"linux-dfir/internal/procfs"
 )
 
 func TestCollectWithFixtureProc(t *testing.T) {
@@ -18,15 +21,23 @@ func TestCollectWithFixtureProc(t *testing.T) {
 	restore := SetProcRootForTest(filepath.Join(root, "proc"))
 	defer restore()
 
+	exePath := filepath.Join(root, "fixture-exe")
+	exeData := []byte("fixture exe\n")
+	if err := os.WriteFile(exePath, exeData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exeSHA256 := fmt.Sprintf("%x", sha256.Sum256(exeData))
+
 	base := filepath.Join(procRoot, "123")
 	writeFile(t, filepath.Join(base, "status"), "Name:\ttestproc\nState:\tS (sleeping)\nPPid:\t1\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n")
+	writeFile(t, filepath.Join(base, "stat"), "123 (testproc) S 1 120 80 34816 0 0 0 0 0 0 0 0 0 0 20 0 1 0 123456\n")
 	writeFile(t, filepath.Join(base, "cmdline"), "testproc\x00--flag\x00--api-key\x00super-secret-process\x00--password=\"correct horse\"\x00")
 	writeFile(t, filepath.Join(base, "environ"), "SECRET_TOKEN=abc\x00")
 	writeFile(t, filepath.Join(base, "maps"), "00400000-00401000 r-xp 00000000 00:00 0 /bin/test\n00401000-00402000 rwxp 00000000 00:00 0 /tmp/deleted (deleted)\n")
 	if err := os.MkdirAll(filepath.Join(base, "fd"), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/bin/test", filepath.Join(base, "exe")); err != nil {
+	if err := os.Symlink(exePath, filepath.Join(base, "exe")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("/tmp", filepath.Join(base, "cwd")); err != nil {
@@ -38,6 +49,45 @@ func TestCollectWithFixtureProc(t *testing.T) {
 	if err := os.Symlink("/tmp/file", filepath.Join(base, "fd", "1")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink("/dev/pts/3", filepath.Join(base, "fd", "0")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(base, "cgroup"), "0::/user.slice/user-1000.slice/session-2.scope\n9:cpu,memory:/docker/containerid\n")
+	if err := os.MkdirAll(filepath.Join(base, "ns"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("mnt:[4026531840]", filepath.Join(base, "ns", "mnt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("pid:[4026531836]", filepath.Join(base, "ns", "pid")); err != nil {
+		t.Fatal(err)
+	}
+
+	childBase := filepath.Join(procRoot, "124")
+	writeFile(t, filepath.Join(childBase, "status"), "Name:\tchildproc\nState:\tR (running)\nPPid:\t123\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n")
+	writeFile(t, filepath.Join(childBase, "stat"), "124 (childproc) R 123 120 80 34816 0 0 0 0 0 0 0 0 0 0 20 0 1 0 123999\n")
+	writeFile(t, filepath.Join(childBase, "cmdline"), "childproc\x00--token=child-secret\x00")
+	writeFile(t, filepath.Join(childBase, "environ"), "")
+	writeFile(t, filepath.Join(childBase, "maps"), "")
+	if err := os.MkdirAll(filepath.Join(childBase, "fd"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(exePath, filepath.Join(childBase, "exe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/tmp", filepath.Join(childBase, "cwd")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(childBase, "root")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(childBase, "cgroup"), "0::/user.slice/user-1000.slice/session-2.scope\n")
+	if err := os.MkdirAll(filepath.Join(childBase, "ns"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("mnt:[4026531840]", filepath.Join(childBase, "ns", "mnt")); err != nil {
+		t.Fatal(err)
+	}
 
 	out, outDir := newOutput(t)
 	if err := Collect(context.Background(), out); err != nil {
@@ -47,7 +97,7 @@ func TestCollectWithFixtureProc(t *testing.T) {
 	assertFileContains(t, filepath.Join(outDir, "legacy/process/procfs_ps_auxw.out"), "testproc --flag")
 	assertFileContains(t, filepath.Join(outDir, "legacy/process/procfs_ps_-elf.out"), "testproc --flag")
 	assertFileContains(t, filepath.Join(outDir, "legacy/process/procfs_lsof.out"), "/tmp/file")
-	assertFileContains(t, filepath.Join(outDir, "legacy/process/procfs_lsof.out"), "txt REG /bin/test")
+	assertFileContains(t, filepath.Join(outDir, "legacy/process/procfs_lsof.out"), "txt REG "+exePath)
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "\"pid\":123")
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"cmdline":["testproc","--flag","--api-key","[redacted]","--password=\"[redacted]\""]`)
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "\"exists\":true")
@@ -59,10 +109,88 @@ func TestCollectWithFixtureProc(t *testing.T) {
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "\"map_count\":2")
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "\"writable_executable_count\":1")
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "process:123")
-	assertStreamCount(t, filepath.Join(outDir, "ai/evidence.jsonl"), "entities/process", 1)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"stream":"facts/process_lineage"`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"process_name":"testproc"`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"start_time_ticks":123456`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"process_session_id":80`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"tty_nr":34816`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"terminal_hint":"/dev/pts/3"`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"cgroup_lines":[`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"controllers":["cpu","memory"]`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"namespaces":[`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"inode":"4026531840"`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"exe_sha256":"`+exeSHA256+`"`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"exe_size":12`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"lineage_key":"pid:123:start_ticks:123456"`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"parent_key":"pid:123:start_ticks:123456"`)
+	assertStreamCount(t, filepath.Join(outDir, "ai/evidence.jsonl"), "entities/process", 2)
+	assertStreamCount(t, filepath.Join(outDir, "ai/evidence.jsonl"), "facts/process_lineage", 2)
 	assertStreamCount(t, filepath.Join(outDir, "ai/evidence.jsonl"), "parsed/process_fds", 0)
 	assertStreamCount(t, filepath.Join(outDir, "ai/evidence.jsonl"), "parsed/process_maps", 0)
 	assertEvidenceLineContainsAll(t, filepath.Join(outDir, "ai/evidence.jsonl"), []string{`"stream":"entities/process"`, `"pid":123`}, []string{`"fds":[`, `"maps":`, `"sources":[`})
+	assertEvidenceLineContainsAll(t, filepath.Join(outDir, "ai/evidence.jsonl"), []string{`"stream":"facts/process_lineage"`, `"pid":124`}, []string{`"ppid":123`, `"parent_key":"pid:123:start_ticks:123456"`, `"cmdline":["childproc","--token=[redacted]"]`})
+}
+
+func TestProcessLineageHashesProcExeLinkTarget(t *testing.T) {
+	root := t.TempDir()
+	restore := SetProcRootForTest(filepath.Join(root, "proc"))
+	defer restore()
+
+	runningExe := filepath.Join(root, "running-exe")
+	runningData := []byte("running image\n")
+	if err := os.WriteFile(runningExe, runningData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	replacedExe := filepath.Join(root, "replaced-exe")
+	replacedData := []byte("replaced image\n")
+	if err := os.WriteFile(replacedExe, replacedData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runningSHA256 := fmt.Sprintf("%x", sha256.Sum256(runningData))
+	replacedSHA256 := fmt.Sprintf("%x", sha256.Sum256(replacedData))
+
+	base := filepath.Join(procRoot, "222")
+	writeFile(t, filepath.Join(base, "status"), "Name:\treplaced\nState:\tS (sleeping)\nPPid:\t1\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n")
+	writeFile(t, filepath.Join(base, "stat"), "222 (replaced) S 1 120 80 0 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 4444\n")
+	writeFile(t, filepath.Join(base, "cmdline"), "replaced\x00")
+	writeFile(t, filepath.Join(base, "environ"), "")
+	writeFile(t, filepath.Join(base, "maps"), "")
+	if err := os.MkdirAll(filepath.Join(base, "fd"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(base, "ns"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(base, "cgroup"), "")
+	if err := os.Symlink(runningExe, filepath.Join(base, "exe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/tmp", filepath.Join(base, "cwd")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/", filepath.Join(base, "root")); err != nil {
+		t.Fatal(err)
+	}
+
+	proc, err := procfs.ReadProcess(procRoot, 222)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proc.Exe = replacedExe
+	out, _ := newOutput(t)
+	record, issues := processLineageRecord(out, proc, map[int]string{222: lineageKey(proc)})
+	if len(issues) != 0 {
+		t.Fatalf("unexpected issues: %+v", issues)
+	}
+	if record.Exe != replacedExe {
+		t.Fatalf("display exe should preserve readlink text, got %q", record.Exe)
+	}
+	if record.ExeSHA256 != runningSHA256 {
+		t.Fatalf("exe hash should use proc exe link target, got %s want %s", record.ExeSHA256, runningSHA256)
+	}
+	if record.ExeSHA256 == replacedSHA256 {
+		t.Fatalf("exe hash used replaced path instead of proc exe link")
+	}
 }
 
 func TestCollectHandlesPidRace(t *testing.T) {
