@@ -4,12 +4,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"linux-dfir/internal/evidence"
 	"linux-dfir/internal/output"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestCollectWithFixtureFileEnum(t *testing.T) {
@@ -27,6 +30,9 @@ func TestCollectWithFixtureFileEnum(t *testing.T) {
 	writeFixtureFile(t, rootPath(root, "/lib/modules/1.2.3/kernel/drivers/test.ko"), "module-bytes\n", 0o640)
 	writeFixtureFile(t, rootPath(root, "/tmp/open.log"), "abc\n", 0o640)
 	writeFixtureFile(t, rootPath(root, "/tmp/recent.sh"), "#!/bin/sh\nid\n", 0o755)
+	xattrPath := rootPath(root, "/tmp/xattr.txt")
+	writeFixtureFile(t, xattrPath, "xattr fixture\n", 0o640)
+	xattrSet := trySetXattr(t, xattrPath, "user.dfir_test", []byte("xattr value not collected"))
 	writeFixtureFile(t, rootPath(root, "/tmp/dfir-old-run/ai/evidence.jsonl"), "old evidence\n", 0o640)
 	writeFixtureFile(t, rootPath(root, "/tmp/linux-dfir-review-profiles/ai/manifest.json"), "{}\n", 0o640)
 	writeFixtureFile(t, rootPath(root, "/tmp/dfir-work/profiles/standard.yaml"), "name: standard\n", 0o640)
@@ -91,6 +97,14 @@ func TestCollectWithFixtureFileEnum(t *testing.T) {
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"process_fd":"7"`)
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "/tmp/recent.sh")
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "/tmp/open.log")
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"stream":"facts/file_attributes"`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"hash_status":"ok"`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"xattr_count":`)
+	if xattrSet {
+		assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "/tmp/xattr.txt")
+		assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "user.dfir_test")
+		assertFileNotContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "xattr value not collected")
+	}
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "/tmp/dfir-notes.sh")
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "/tmp/linux-dfir-backdoor/payload.sh")
 	assertFileNotContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "/tmp/dfir-old-run/ai/evidence.jsonl")
@@ -103,6 +117,10 @@ func TestCollectWithFixtureFileEnum(t *testing.T) {
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"skip_reason":"pseudo filesystem path is metadata-only"`)
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "/var/tmp/big.bin")
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"skipped":true`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"hash_status":"skipped"`)
+	if runtime.GOOS != "linux" {
+		assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "FS_IOC_GETFLAGS is Linux-specific")
+	}
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "deleted_open_file")
 	assertFileContains(t, filepath.Join(outDir, "legacy/enum/enum_file.out"), "/tmp/open.log")
 	assertFileContains(t, filepath.Join(outDir, "legacy/enum/file_info.out"), "/usr/bin/suidbin")
@@ -139,6 +157,8 @@ func TestCollectWithMissingRootsWritesAbsent(t *testing.T) {
 
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"exists":false`)
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"exists":false`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"stream":"facts/file_attributes"`)
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"status":"absent"`)
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), "missing-proc")
 	assertFileContains(t, filepath.Join(outDir, "legacy/enum/enum_file.out"), "")
 	assertFileContains(t, filepath.Join(outDir, "legacy/enum/file_info.out"), "path\tcategory")
@@ -190,6 +210,15 @@ func writeFixtureFile(t *testing.T, path, data string, mode os.FileMode) {
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func trySetXattr(t *testing.T, path, name string, value []byte) bool {
+	t.Helper()
+	if err := unix.Setxattr(path, name, value, 0); err != nil {
+		t.Logf("xattr fixture skipped for %s: %v", path, err)
+		return false
+	}
+	return true
 }
 
 func rootPath(root, sourcePath string) string {

@@ -26,6 +26,7 @@ const (
 	collector       = "files"
 	filesRel        = "entities/file.jsonl"
 	hashesRel       = "facts/file_hashes.jsonl"
+	attributesRel   = "facts/file_attributes.jsonl"
 	suidFilesRel    = "facts/suid_files.jsonl"
 	openFilesRel    = "facts/open_files.jsonl"
 	recentFilesRel  = "facts/recent_files.jsonl"
@@ -81,6 +82,43 @@ type HashRecord struct {
 	SHA256       string `json:"sha256,omitempty"`
 	Skipped      bool   `json:"skipped,omitempty"`
 	SkipReason   string `json:"skip_reason,omitempty"`
+}
+
+type FileAttributeRecord struct {
+	evidence.RecordMeta
+	Exists                bool                 `json:"exists"`
+	AbsentReason          string               `json:"absent_reason,omitempty"`
+	Path                  string               `json:"path"`
+	Category              string               `json:"category,omitempty"`
+	Source                string               `json:"source,omitempty"`
+	FileType              string               `json:"file_type,omitempty"`
+	Mode                  string               `json:"mode,omitempty"`
+	UID                   *int                 `json:"uid,omitempty"`
+	GID                   *int                 `json:"gid,omitempty"`
+	Size                  *int64               `json:"size,omitempty"`
+	MTime                 *time.Time           `json:"mtime,omitempty"`
+	CTime                 *time.Time           `json:"ctime,omitempty"`
+	BirthTime             *time.Time           `json:"birth_time,omitempty"`
+	BirthTimeStatus       string               `json:"birth_time_status,omitempty"`
+	SHA256                string               `json:"sha256,omitempty"`
+	HashStatus            string               `json:"hash_status,omitempty"`
+	XattrCount            *int                 `json:"xattr_count,omitempty"`
+	XattrNames            []string             `json:"xattr_names,omitempty"`
+	LinuxCapabilityRawHex string               `json:"linux_capability_raw_hex,omitempty"`
+	LinuxCapabilitySize   *int                 `json:"linux_capability_size,omitempty"`
+	LinuxCapabilitySHA256 string               `json:"linux_capability_sha256,omitempty"`
+	FSFlagsHex            string               `json:"fs_flags_hex,omitempty"`
+	Immutable             *bool                `json:"immutable,omitempty"`
+	AppendOnly            *bool                `json:"append_only,omitempty"`
+	PackageOwner          string               `json:"package_owner,omitempty"`
+	Status                string               `json:"status"`
+	Issues                []FileAttributeIssue `json:"issues,omitempty"`
+}
+
+type FileAttributeIssue struct {
+	Field  string `json:"field"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 type FileFlagRecord struct {
@@ -316,6 +354,9 @@ func writeFile(out *output.Manager, item discoveredFile) (FileRecord, error) {
 		if err := out.AppendAIJSONL(filesRel, record, collector, item.DisplayPath, sourceType(item), "high"); err != nil {
 			return record, err
 		}
+		if err := writeFileAttributes(out, item, record, nil, nil); err != nil {
+			return record, err
+		}
 		if record.Category == "open_file" {
 			if err := appendFileRecord(out, openFilesRel, record); err != nil {
 				return record, err
@@ -359,10 +400,16 @@ func writeFile(out *output.Manager, item discoveredFile) (FileRecord, error) {
 	if err := writeClassifiedRecords(out, record); err != nil {
 		return record, err
 	}
+	var hashRecord *HashRecord
 	if info.Mode().IsRegular() {
-		if err := writeHash(out, item, info); err != nil {
+		hash, err := writeHash(out, item, info)
+		if err != nil {
 			return record, err
 		}
+		hashRecord = &hash
+	}
+	if err := writeFileAttributes(out, item, record, info, hashRecord); err != nil {
+		return record, err
 	}
 	reasons := fileFlagReasons(record)
 	if len(reasons) > 0 {
@@ -383,17 +430,17 @@ func writeFile(out *output.Manager, item discoveredFile) (FileRecord, error) {
 	return record, nil
 }
 
-func writeHash(out *output.Manager, item discoveredFile, info os.FileInfo) error {
+func writeHash(out *output.Manager, item discoveredFile, info os.FileInfo) (HashRecord, error) {
 	record := HashRecord{RecordMeta: out.Meta(collector, hashesRel, item.DisplayPath, sourceType(item), "high"), Exists: true, Path: item.DisplayPath, Size: info.Size()}
 	if shouldSkipContentHash(item.DisplayPath) {
 		record.Skipped = true
 		record.SkipReason = "pseudo filesystem path is metadata-only"
-		return out.AppendAIJSONL(hashesRel, record, collector, item.DisplayPath, sourceType(item), "high")
+		return record, out.AppendAIJSONL(hashesRel, record, collector, item.DisplayPath, sourceType(item), "high")
 	}
 	if info.Size() > hashSizeLimit {
 		record.Skipped = true
 		record.SkipReason = "file exceeds hash size limit"
-		return out.AppendAIJSONL(hashesRel, record, collector, item.DisplayPath, sourceType(item), "high")
+		return record, out.AppendAIJSONL(hashesRel, record, collector, item.DisplayPath, sourceType(item), "high")
 	}
 	hashes, err := hashFile(item.ActualPath)
 	if err != nil {
@@ -405,7 +452,55 @@ func writeHash(out *output.Manager, item discoveredFile, info os.FileInfo) error
 		record.SHA1 = hashes.sha1
 		record.SHA256 = hashes.sha256
 	}
-	return out.AppendAIJSONL(hashesRel, record, collector, item.DisplayPath, sourceType(item), "high")
+	return record, out.AppendAIJSONL(hashesRel, record, collector, item.DisplayPath, sourceType(item), "high")
+}
+
+func writeFileAttributes(out *output.Manager, item discoveredFile, file FileRecord, info os.FileInfo, hash *HashRecord) error {
+	record := FileAttributeRecord{
+		RecordMeta:   out.Meta(collector, attributesRel, file.Path, recordSourceType(file), "high"),
+		Exists:       file.Exists,
+		AbsentReason: file.AbsentReason,
+		Path:         file.Path,
+		Category:     file.Category,
+		Source:       file.Source,
+		FileType:     file.FileType,
+		Mode:         file.Mode,
+		MTime:        file.ModTime,
+	}
+	var issues []FileAttributeIssue
+	if !file.Exists {
+		record.Status = "absent"
+		return out.AppendAIJSONL(attributesRel, record, collector, file.Path, recordSourceType(file), "high")
+	}
+	record.UID = intPtr(file.UID)
+	record.GID = intPtr(file.GID)
+	record.Size = int64Ptr(file.Size)
+	if hash == nil {
+		if file.FileType == "regular" {
+			issues = append(issues, FileAttributeIssue{Field: "sha256", Status: "not_collected"})
+		}
+	} else {
+		switch {
+		case hash.SHA256 != "":
+			record.SHA256 = hash.SHA256
+			record.HashStatus = "ok"
+		case hash.Skipped:
+			record.HashStatus = "skipped"
+			issues = append(issues, FileAttributeIssue{Field: "sha256", Status: "skipped", Error: hash.SkipReason})
+		case hash.AbsentReason != "":
+			record.HashStatus = "error"
+			issues = append(issues, FileAttributeIssue{Field: "sha256", Status: "error", Error: hash.AbsentReason})
+		default:
+			record.HashStatus = "absent"
+			issues = append(issues, FileAttributeIssue{Field: "sha256", Status: "absent"})
+		}
+	}
+	if info != nil {
+		issues = append(issues, enrichPlatformFileAttributes(item.ActualPath, info, &record)...)
+	}
+	record.Issues = issues
+	record.Status = fileAttributeStatus(record.Exists, issues)
+	return out.AppendAIJSONL(attributesRel, record, collector, file.Path, recordSourceType(file), "high")
 }
 
 func writeClassifiedRecords(out *output.Manager, record FileRecord) error {
@@ -473,6 +568,9 @@ func writeAbsent(out *output.Manager, path, category, reason string) error {
 	}
 	record := FileRecord{RecordMeta: out.Meta(collector, filesRel, path, recordSourceType(FileRecord{Source: source}), "high"), Exists: false, AbsentReason: reason, Path: path, Category: category, Source: source}
 	if err := out.AppendAIJSONL(filesRel, record, collector, path, recordSourceType(record), "high"); err != nil {
+		return err
+	}
+	if err := writeFileAttributes(out, discoveredFile{DisplayPath: path, ActualPath: actualPath(path), Category: category, Source: source}, record, nil, nil); err != nil {
 		return err
 	}
 	if category == "open_file" {
@@ -706,6 +804,45 @@ func formatTimePtr(t *time.Time) string {
 		return ""
 	}
 	return t.Format(time.RFC3339)
+}
+
+func fileAttributeStatus(exists bool, issues []FileAttributeIssue) string {
+	if !exists {
+		return "absent"
+	}
+	if len(issues) > 0 {
+		return "partial"
+	}
+	return "ok"
+}
+
+func parseNullSeparatedNames(data []byte) []string {
+	var names []string
+	for _, part := range strings.Split(string(data), "\x00") {
+		if part == "" {
+			continue
+		}
+		names = append(names, part)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func hasName(names []string, want string) bool {
+	i := sort.SearchStrings(names, want)
+	return i < len(names) && names[i] == want
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func actualPath(display string) string {

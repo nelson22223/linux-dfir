@@ -56,7 +56,7 @@
 | Cron / 周期脚本 | 首轮已实现 | `facts/cron_entries`，覆盖 schedule/user/command、target_path、target_exists、target_mode、target_uid/gid、target_size、target_sha256 | interpreter 深层脚本、package owner、mtime |
 | Journal 事件 | 首轮已实现，待 Linux VM 真实 journal 补测 | `facts/journal_events`，覆盖 journal JSON event、absent/error/status、raw/legacy journalctl stdout、`raw_copy_ref` | timeout/empty/超长行/多值字段变体补测；真实 Linux journal 权限和输出变体补测 |
 | 进程谱系 | 首轮已实现，待 Linux VM 真实 `/proc` 补测 | `facts/process_lineage`，合并 pid/ppid、lineage_key/parent_key、start_time_ticks、session、tty、cmdline、exe hash/metadata、cgroup、namespace | package owner、真实 Linux cgroup/ns/exe deleted 场景补测、与 session/network/container 更深关联 |
-| 文件属性 / 变更 | 部分覆盖，尚无专用属性 stream | 已有 `entities/file`、`facts/file_hashes`、`facts/file_flags`、timeline | 新增/增强 xattr、capability、immutable、append-only、statx/btime、关键文件 mutation timeline |
+| 文件属性 / 变更 | 首轮已实现，待 Linux VM 真实属性补测 | `facts/file_attributes`，复用现有文件枚举目标，覆盖 mode/uid/gid/size/mtime/ctime/birth_time、sha256/hash_status、xattr names/count、Linux capability、fs flags、immutable、append_only、issues | package owner 合并、关键文件 mutation timeline、真实 Linux xattr/capability/immutable/statx 补测 |
 
 ## 当前采集缺失与优先级
 
@@ -71,7 +71,7 @@
 | P0 | Cron / 周期脚本增强 | 部分覆盖 | cron 入口已采到 schedule/user/command；首轮已把命令首个绝对路径和周期脚本自身关联为 target_path、target_exists、target_mode、target_uid/gid、target_size、target_sha256；interpreter 深层脚本、package owner、mtime 后续增强 | `/etc/crontab`、`/etc/cron.d/*`、`/etc/cron.hourly`、`/etc/cron.daily`、`/var/spool/cron*`、脚本实际路径 | cron 是最常见 Linux 持久化方式之一；把入口和脚本文件直接关联，AI 后续无需回翻 raw | 增强 `facts/cron_entries` |
 | P1 | Journal 事件 | 已完成首轮 | systemd journal 事件结构化，例如 unit、pid、uid、boot_id、priority、message、timestamp；命令不可用、权限不足、失败或 JSON 损坏时输出 status/error fact；stdout 保留 raw/legacy 复核副本 | `journalctl -o json --no-pager`、`/var/log/journal`、`/run/log/journal` | 现代 Linux 大量服务启动、失败、重启、登录和安全事件只在 journal 里完整出现，可补 syslog 缺口 | `facts/journal_events` |
 | P1 | 进程谱系事实 | 已完成首轮 | 进程父子链、start_time、session、tty、exe hash/metadata、namespace/cgroup 的合并事实；exe hash/stat 基于 `/proc/[pid]/exe` link path，避免进程文件替换后 hash 当前路径 | `/proc/[pid]/stat`、`status`、`cmdline`、`exe`、`cwd`、`fd`、`cgroup`、`ns/*` | 帮 parser 从孤立进程记录升级为执行链，关联登录、sudo、网络外联和落地文件 | `facts/process_lineage` |
-| P1 | 文件变更 / 属性 | 部分覆盖 | 文件变化和扩展属性事实，例如 mtime/ctime/btime、xattr、capability、immutable、append-only、hash、package owner | 关键系统目录、webroot、tmp/dev_shm、persistence 指向文件、SUID/SGID 文件；可用 `statx`、xattr、capability、fs flags | 排查 webshell、落地文件、命令替换、权限隐藏和防删除手段；collector 只记录属性和时间事实 | `facts/file_attributes`、`facts/file_timeline` |
+| P1 | 文件变更 / 属性 | 已完成首轮 | 文件变化和扩展属性事实，例如 mtime/ctime/btime、xattr names/count、Linux capability、immutable、append-only、hash；首轮不新增全盘扫描，只复用现有 file enum 目标 | 关键系统目录、webroot、tmp/dev_shm、persistence 指向文件、SUID/SGID 文件；Linux 使用 `statx`、xattr、`FS_IOC_GETFLAGS` | 排查 webshell、落地文件、命令替换、权限隐藏和防删除手段；collector 只记录属性和时间事实 | `facts/file_attributes`、`facts/file_timeline` |
 | P1 | DHCP 租约 | 仅留原文 | DHCP 分配事实，例如 lease IP、router、DNS、DHCP server、lease start/end、interface | `/var/lib/dhcp/*`、`/var/lib/dhclient/*`、NetworkManager lease 目录 | 还原主机所在网络、历史 IP、DNS 和网关，辅助横向移动、资产定位和时间线解释 | `facts/dhcp_leases` |
 | P1 | DNS 运行时解析器 | 缺失/部分覆盖 | 运行时 DNS 配置和 resolver 状态，例如 resolved、NetworkManager、dnsmasq 当前 nameserver/search/cache source | `/etc/resolv.conf`、systemd-resolved runtime、NetworkManager runtime、dnsmasq 配置和 lease/cache 文件 | DNS 被篡改或代理化会影响外联和下载路径；运行时 DNS 常与静态 resolv.conf 不一致 | 增强 `facts/dns_config` |
 | P1 | 原生命令交叉观察 | 仅留原文 | 系统命令输出与 Go-native/procfs 采集结果的交叉观察事实，并记录命令路径、hash、package owner | `ip`、`ss`、`netstat`、`lsof`、`route`、`arp`、`ps` 等可用命令及其二进制路径 | 当系统命令可能被替换时，差异事实可给 parser 提供复核线索；collector 不判定篡改 | `facts/command_observations` |
@@ -137,6 +137,14 @@ Collector 工作：
 
 目标：补齐命令替换、webshell、SUID 后门和不可变属性排查所需文件事实。
 
+当前进展：
+
+- 状态：已完成首轮实现，待 Linux VM 真实 xattr/capability/immutable/statx 补测。
+- DEV 子 agent：PASS，完成 `facts/file_attributes`，改动集中在 `internal/collectors/files`。
+- Review 子 agent：PASS，确认没有新增全盘扫描、hash 复用现有结果、xattr 默认只输出名称/count、Linux capability raw hex/size/sha256 可作为能力事实保留。
+- Test 子 agent：PASS，覆盖 `go test ./internal/collectors/files -count=1`、`go test ./...`、Linux 编译检查、字段边界扫描、mac CLI smoke；mac smoke 中 `facts/file_attributes=1274`。
+- mac 限制：Linux-only `security.capability`、`FS_IOC_GETFLAGS`、真实 immutable/append-only、statx btime 需要 Linux VM 补测。
+
 Collector 工作：
 
 - 对关键系统目录、webroot、tmp/dev_shm、persistence 指向文件、SUID/SGID 文件采集 xattr、capability、immutable、append-only、statx/btime fallback、hash、package owner。
@@ -146,6 +154,8 @@ Collector 工作：
 
 - fixture 覆盖 capability、xattr、immutable/append-only、btime fallback。
 - 不输出“异常/恶意”判断，只输出属性和时间事实。
+- 首轮已覆盖普通文件属性、hash_status、可选 xattr name、不存在路径、platform unsupported issue、不阻断采集。
+- package owner 与 mutation timeline 作为后续增强保留。
 
 ### Phase B：会话观察深化
 
