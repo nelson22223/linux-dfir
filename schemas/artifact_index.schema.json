@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Linux DFIR Artifact Index",
+  "type": "object",
+  "required": ["schema_version", "case_id", "host_id", "session_id", "artifacts"],
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["artifact_id", "case_id", "host_id", "session_id", "collector", "path", "size", "sha256", "source_path", "source_type", "source_trust", "collected_at", "raw_artifact_ref"],
+      "properties": {
+        "artifact_id": { "type": "string" },
+        "case_id": { "type": "string" },
+        "host_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "collector": { "type": "string" },
+        "path": { "type": "string" },
+        "size": { "type": "integer" },
+        "sha256": { "type": "string" },
+        "md5": { "type": "string" },
+        "source_path": { "type": "string" },
+        "source_type": { "type": "string" },
+        "source_trust": { "type": "string" },
+        "collected_at": { "type": "string", "format": "date-time" },
+        "raw_artifact_ref": { "type": "string" }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": { "type": "string" },
+    "case_id": { "type": "string" },
+    "host_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } }
+  }
+}

@@ -1,0 +1,7 @@
+name: phase9-browser
+description: Phase 9 browser profile discovery, raw SQLite copy, and history/cookie metadata parsing.
+collectors:
+  - browser
+limits:
+  max_file_size: 104857600
+  timeout: 5m

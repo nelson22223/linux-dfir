@@ -1,0 +1,12 @@
+name: minimal-safe
+description: Low-sensitivity metadata-only collection profile.
+collectors:
+  - host
+  - system
+  - users
+  - process
+  - network
+limits:
+  max_file_size: 10485760
+  timeout: 5m
+

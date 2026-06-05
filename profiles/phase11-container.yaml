@@ -1,0 +1,7 @@
+name: phase11-container
+description: Phase 11 container, cgroup, namespace, and runtime metadata collection.
+collectors:
+  - container
+limits:
+  max_file_size: 104857600
+  timeout: 5m

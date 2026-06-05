@@ -1,0 +1,22 @@
+name: deep
+description: Extended collection profile for deeper file, log, browser, and container review.
+collectors:
+  - host
+  - system
+  - users
+  - disk
+  - time
+  - kernel
+  - process
+  - network
+  - persistence
+  - browser
+  - files
+  - packages
+  - logs
+  - container
+  - scanner
+limits:
+  max_file_size: 524288000
+  timeout: 45m
+

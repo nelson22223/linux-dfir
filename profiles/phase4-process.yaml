@@ -1,0 +1,7 @@
+name: phase4-process
+description: Phase 4 process collection from procfs.
+collectors:
+  - process
+limits:
+  max_file_size: 104857600
+  timeout: 5m

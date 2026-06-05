@@ -1,0 +1,7 @@
+name: phase5-network
+description: Phase 5 network collection from procfs socket tables and Linux network files.
+collectors:
+  - network
+limits:
+  max_file_size: 104857600
+  timeout: 5m

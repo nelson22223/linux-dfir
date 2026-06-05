@@ -1,0 +1,11 @@
+name: phase2
+description: Phase 2 host, system, users, disk, and time collection.
+collectors:
+  - host
+  - system
+  - users
+  - disk
+  - time
+limits:
+  max_file_size: 104857600
+  timeout: 5m

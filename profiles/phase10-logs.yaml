@@ -1,0 +1,7 @@
+name: phase10-logs
+description: Phase 10 one-shot emergency response log collection, raw evidence copy, and best-effort parsing.
+collectors:
+  - logs
+limits:
+  max_file_size: 104857600
+  timeout: 5m

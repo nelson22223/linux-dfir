@@ -1,0 +1,7 @@
+name: phase6-persistence
+description: Phase 6 persistence collection from Linux autorun, service, shell, SSH, and policy files.
+collectors:
+  - persistence
+limits:
+  max_file_size: 104857600
+  timeout: 5m

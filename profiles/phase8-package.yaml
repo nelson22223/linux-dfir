@@ -1,0 +1,7 @@
+name: phase8-package
+description: Phase 8 package inventory and file ownership collection.
+collectors:
+  - packages
+limits:
+  max_file_size: 104857600
+  timeout: 5m

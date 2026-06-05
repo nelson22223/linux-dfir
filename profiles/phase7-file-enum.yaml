@@ -1,0 +1,7 @@
+name: phase7-file-enum
+description: Phase 7 file enumeration, metadata, suspicious file classes, and bounded hashing.
+collectors:
+  - files
+limits:
+  max_file_size: 104857600
+  timeout: 5m

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Linux DFIR Entity",
+  "type": "object",
+  "required": ["schema_version", "case_id", "host_id", "session_id", "collector", "entity_type", "entity_id", "source_path", "source_type", "source_trust", "collected_at", "raw_artifact_ref"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "case_id": { "type": "string" },
+    "host_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "collector": { "type": "string" },
+    "entity_type": { "type": "string" },
+    "entity_id": { "type": "string" },
+    "source_path": { "type": "string" },
+    "source_type": { "type": "string" },
+    "source_trust": { "type": "string" },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "raw_artifact_ref": { "type": "string" }
+  }
+}

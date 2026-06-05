@@ -1,0 +1,7 @@
+name: phase1
+description: Phase 1 output framework, manifest, collection log, timeline, and artifact index.
+collectors:
+  - session
+limits:
+  max_file_size: 104857600
+  timeout: 2m

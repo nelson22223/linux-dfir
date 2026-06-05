@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Linux DFIR Error Event",
+  "type": "object",
+  "required": ["schema_version", "artifact_id", "case_id", "host_id", "session_id", "collector", "error", "source_path", "source_type", "source_trust", "collected_at", "raw_artifact_ref"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "artifact_id": { "type": "string" },
+    "case_id": { "type": "string" },
+    "host_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "collector": { "type": "string" },
+    "error": { "type": "string" },
+    "source_path": { "type": "string" },
+    "source_type": { "type": "string" },
+    "source_trust": { "type": "string" },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "raw_artifact_ref": { "type": "string" }
+  }
+}

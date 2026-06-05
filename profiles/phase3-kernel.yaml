@@ -1,0 +1,7 @@
+name: phase3-kernel
+description: Phase 3 kernel and module collection.
+collectors:
+  - kernel
+limits:
+  max_file_size: 104857600
+  timeout: 5m

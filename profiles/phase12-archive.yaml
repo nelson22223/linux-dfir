@@ -1,0 +1,7 @@
+name: phase12-archive
+description: Phase 12 archive, integrity, and finalized package validation.
+collectors:
+  - session
+limits:
+  max_file_size: 104857600
+  timeout: 2m

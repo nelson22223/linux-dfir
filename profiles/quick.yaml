@@ -1,0 +1,13 @@
+name: quick
+description: Fast triage collection for the first response window.
+collectors:
+  - host
+  - system
+  - users
+  - process
+  - network
+  - persistence
+limits:
+  max_file_size: 104857600
+  timeout: 5m
+

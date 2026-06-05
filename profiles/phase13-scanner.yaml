@@ -1,0 +1,8 @@
+name: phase13-scanner
+description: Phase 13 optional scanner plugin validation profile.
+collectors:
+  - session
+  - scanner
+limits:
+  max_file_size: 104857600
+  timeout: 5m

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Linux DFIR Manifest",
+  "type": "object",
+  "required": ["schema_version", "case_id", "host_id", "session_id", "created_at", "completed_at", "output_mode", "profile", "collectors", "artifact_count", "artifacts"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "case_id": { "type": "string" },
+    "host_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "output_mode": { "type": "string" },
+    "profile": { "type": "string" },
+    "collectors": { "type": "array", "items": { "type": "string" } },
+    "artifact_count": { "type": "integer" },
+    "artifacts": { "type": "array", "items": { "$ref": "artifact_index.schema.json#/$defs/artifact" } }
+  }
+}
