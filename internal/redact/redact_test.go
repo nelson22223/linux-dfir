@@ -20,6 +20,19 @@ func TestTextRedactsCredentialPatterns(t *testing.T) {
 	}
 }
 
+func TestTextRedactsPrivateKeyBlockBody(t *testing.T) {
+	input := "prefix -----BEGIN OPENSSH PRIVATE KEY-----\nsecret-key-body\n-----END OPENSSH PRIVATE KEY----- suffix"
+	got := Text(input)
+	for _, fragment := range []string{"BEGIN OPENSSH PRIVATE KEY", "secret-key-body", "END OPENSSH PRIVATE KEY"} {
+		if strings.Contains(got, fragment) {
+			t.Fatalf("redacted private key block still contains %q: %s", fragment, got)
+		}
+	}
+	if !strings.Contains(got, "prefix [redacted] suffix") {
+		t.Fatalf("redacted private key block missing placeholder context: %s", got)
+	}
+}
+
 func TestArgsRedactsOptionValues(t *testing.T) {
 	got := Args([]string{"curl", "https://user:pass@example.test/path?token=secret", "--api-key", "secret", "--mode", "prod"})
 	want := []string{"curl", "https://[redacted]@example.test/path?token=[redacted]", "--api-key", "[redacted]", "--mode", "prod"}

@@ -37,7 +37,7 @@
 | shell profile | Done | `/etc/profile`、`/etc/bash.bashrc`、`/etc/zsh/zshenv`、`/etc/zsh/zprofile`、`/etc/profile.d/*`、用户 `~/.profile`、`~/.bashrc`、`~/.bash_profile`、`~/.bash_login`、`~/.zshrc`、`~/.zprofile`、`~/.zshenv`、`~/.config/fish/config.fish`；结构化 `export/PATH/LD_PRELOAD/LD_LIBRARY_PATH/LD_AUDIT`、alias、source、exec-like 行 | function body 和复杂 shell 语义不解释执行 | P0 | `facts/persistence_items` |
 | sudoers | Done | `/etc/sudoers`、`/etc/sudoers.d`；解析 include、subject、hosts、RunAs、NOPASSWD/SETENV 等 tags、命令列表 | 复杂 alias 展开和续行仍为 best-effort | P0 | `facts/persistence_items` |
 | XDG autostart | Done | system/user autostart `.desktop`，解析 Exec/Name/Hidden | 缺 TryExec、OnlyShowIn/NotShowIn、Terminal、X-GNOME-Autostart-enabled | P1 | 增强 `facts/persistence_items` |
-| PAM 持久化 | Missing | 无专门扫描 | `/etc/pam.d/*` 中 `pam_exec.so`、`pam_python.so`、`pam_script.so`、自定义 `.so` 路径/hash | P0 | `facts/pam_persistence` |
+| PAM 持久化 | Partial | 已输出 `facts/pam_persistence`，解析 `/etc/pam.d/*` 的 pam_type/control/module/module_args/service/source_file，并 best-effort 解析 module_path、hash/size/mode | module package owner、symlink target、include/substack 语义关联、更多发行版 PAM module 目录补测 | P0 | `facts/pam_persistence` |
 | dynamic loader 持久化 | Done | `/etc/ld.so.preload`、`/etc/ld.so.conf`、`/etc/ld.so.conf.d/*`、profile 中 `LD_PRELOAD/LD_LIBRARY_PATH/LD_AUDIT`；目标路径 metadata/hash | package owner 可后续补齐 | P0 | `facts/persistence_items` |
 | service manager 兼容项 | Missing/Partial | systemd/rc/upstart 部分覆盖 | OpenRC、runit、supervisord、cron-like app scheduler 未覆盖 | P2 | `facts/persistence_items` |
 

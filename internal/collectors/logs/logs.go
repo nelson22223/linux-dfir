@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -16,24 +17,29 @@ import (
 	"strings"
 	"time"
 
+	"linux-dfir/internal/collectors/common"
 	"linux-dfir/internal/evidence"
 	"linux-dfir/internal/output"
 	"linux-dfir/internal/redact"
 )
 
 const (
-	collector      = "logs"
-	logEventsRel   = "facts/log_events.jsonl"
-	authEventsRel  = "facts/auth_events.jsonl"
-	loginEventsRel = "facts/login_events.jsonl"
-	sessionObsRel  = "facts/session_observations.jsonl"
-	auditRel       = "facts/audit_events.jsonl"
-	maxCopyBytes   = 64 * 1024 * 1024
-	maxParseLines  = 20000
+	collector       = "logs"
+	logEventsRel    = "facts/log_events.jsonl"
+	authEventsRel   = "facts/auth_events.jsonl"
+	loginEventsRel  = "facts/login_events.jsonl"
+	sessionObsRel   = "facts/session_observations.jsonl"
+	auditRel        = "facts/audit_events.jsonl"
+	journalRel      = "facts/journal_events.jsonl"
+	maxCopyBytes    = 64 * 1024 * 1024
+	maxParseLines   = 20000
+	maxJournalLines = 1000
 )
 
 var (
 	filesystemRoot   = "/"
+	journalTimeout   = 5 * time.Second
+	journalRunner    = common.RunCommand
 	syslogPattern    = regexp.MustCompile(`^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+([^:]+):\s?(.*)$`)
 	isoSyslogPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\S+)\s+(\S+)\s+([^:]+):\s?(.*)$`)
 	auditKVPattern   = regexp.MustCompile(`(\w+)=("[^"]*"|[^\s\x1d]+)`)
@@ -117,6 +123,31 @@ type SessionObservation struct {
 	Sensitive       bool       `json:"sensitive"`
 }
 
+type JournalEvent struct {
+	evidence.RecordMeta
+	Exists             bool       `json:"exists"`
+	AbsentReason       string     `json:"absent_reason,omitempty"`
+	RecordSubtype      string     `json:"record_subtype,omitempty"`
+	Status             string     `json:"status,omitempty"`
+	Error              string     `json:"error,omitempty"`
+	Command            string     `json:"command,omitempty"`
+	LineNumber         int        `json:"line_number,omitempty"`
+	Timestamp          *time.Time `json:"timestamp,omitempty"`
+	Message            string     `json:"message,omitempty"`
+	Unit               string     `json:"unit,omitempty"`
+	SyslogIdentifier   string     `json:"syslog_identifier,omitempty"`
+	PID                *int       `json:"pid,omitempty"`
+	UID                *int       `json:"uid,omitempty"`
+	GID                *int       `json:"gid,omitempty"`
+	BootID             string     `json:"boot_id,omitempty"`
+	Priority           *int       `json:"priority,omitempty"`
+	Transport          string     `json:"transport,omitempty"`
+	Cursor             string     `json:"cursor,omitempty"`
+	MonotonicTimestamp string     `json:"monotonic_timestamp,omitempty"`
+	RawCopyRef         string     `json:"raw_copy_ref,omitempty"`
+	Sensitive          bool       `json:"sensitive"`
+}
+
 type rawLog struct {
 	SourcePath string
 	ActualPath string
@@ -141,38 +172,41 @@ type utmpLayout struct {
 func Collect(ctx context.Context, out *output.Manager) error {
 	logs := discoverLogs()
 	if len(logs) == 0 {
-		return writeAbsent(out, "no log files found")
-	}
-	for _, log := range logs {
-		if err := ctx.Err(); err != nil {
+		if err := writeAbsent(out, "no log files found"); err != nil {
 			return err
 		}
-		copied, err := copyLog(out, log)
-		if err != nil {
-			if !os.IsNotExist(err) {
+	} else {
+		for _, log := range logs {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			copied, err := copyLog(out, log)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					recordError(out, log.SourcePath, "file", relByLogType(log.LogType), err)
+				}
+				if err := writeAbsentForSource(out, log, err.Error()); err != nil {
+					return err
+				}
+				continue
+			}
+			if !log.Parse {
+				if err := writeRawCopyRecord(out, copied); err != nil {
+					return err
+				}
+				if isLoginAccountingLog(log.LogType) {
+					if err := parseLoginAccountingLog(out, copied); err != nil {
+						recordError(out, log.SourcePath, "file", loginEventsRel, err)
+					}
+				}
+				continue
+			}
+			if err := parseCopiedLog(out, copied); err != nil {
 				recordError(out, log.SourcePath, "file", relByLogType(log.LogType), err)
 			}
-			if err := writeAbsentForSource(out, log, err.Error()); err != nil {
-				return err
-			}
-			continue
-		}
-		if !log.Parse {
-			if err := writeRawCopyRecord(out, copied); err != nil {
-				return err
-			}
-			if isLoginAccountingLog(log.LogType) {
-				if err := parseLoginAccountingLog(out, copied); err != nil {
-					recordError(out, log.SourcePath, "file", loginEventsRel, err)
-				}
-			}
-			continue
-		}
-		if err := parseCopiedLog(out, copied); err != nil {
-			recordError(out, log.SourcePath, "file", relByLogType(log.LogType), err)
 		}
 	}
-	return nil
+	return collectJournal(ctx, out)
 }
 
 func discoverLogs() []rawLog {
@@ -332,6 +366,188 @@ func sanitizeLogEvent(event LogEvent) LogEvent {
 		event.Fields = fields
 	}
 	return event
+}
+
+func collectJournal(ctx context.Context, out *output.Manager) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	args := []string{"-o", "json", "--no-pager", "-n", strconv.Itoa(maxJournalLines)}
+	runCtx, cancel := context.WithTimeout(ctx, journalTimeout)
+	defer cancel()
+	result := journalRunner(runCtx, "journalctl", args...)
+	command := journalCommandLine(args)
+	if result.Missing() {
+		return writeJournalStatus(out, "absent", command, "journalctl not found", result.Err, 0)
+	}
+	if result.Err != nil {
+		status := "error"
+		if runCtx.Err() == context.DeadlineExceeded {
+			status = "timeout"
+		}
+		errText := result.Err.Error()
+		if len(result.Output) > 0 {
+			errText = errText + ": " + strings.TrimSpace(string(result.Output))
+		}
+		return writeJournalStatus(out, status, command, errText, result.Err, 0)
+	}
+	rawRef, err := writeJournalRawOutput(out, command, result.Output)
+	if err != nil {
+		return err
+	}
+	return parseJournalOutput(out, command, rawRef, result.Output)
+}
+
+func writeJournalRawOutput(out *output.Manager, command string, data []byte) (string, error) {
+	rawRel := filepath.Join("raw", "logs", "journalctl_json.out")
+	legacyRel := filepath.Join("logs", "journalctl_json.out")
+	if err := out.WriteAIFromSource(rawRel, data, collector, command, "native_command", "medium"); err != nil {
+		return "", err
+	}
+	if err := out.WriteLegacyFromSource(legacyRel, data, collector, command, "native_command", "medium"); err != nil {
+		return "", err
+	}
+	return filepath.Join("ai", rawRel), nil
+}
+
+func parseJournalOutput(out *output.Manager, command, rawRef string, data []byte) error {
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	lineNumber := 0
+	sawLine := false
+	wroteEvent := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		sawLine = true
+		lineNumber++
+		if lineNumber > maxJournalLines {
+			return writeJournalStatus(out, "line_limit_reached", command, fmt.Sprintf("journal line limit reached: %d", maxJournalLines), nil, lineNumber)
+		}
+		event, err := ParseJournalJSONLine(line)
+		if err != nil {
+			if err := writeJournalStatus(out, "parse_error", command, err.Error(), err, lineNumber); err != nil {
+				return err
+			}
+			continue
+		}
+		event.RecordMeta = out.Meta(collector, journalRel, command, "native_command", "medium")
+		event.Exists = true
+		event.Command = redact.Text(command)
+		event.LineNumber = lineNumber
+		event.RawCopyRef = rawRef
+		event.Sensitive = true
+		if err := out.AppendAIJSONL(journalRel, event, collector, command, "native_command", "medium"); err != nil {
+			return err
+		}
+		wroteEvent = true
+	}
+	if err := scanner.Err(); err != nil {
+		return writeJournalStatus(out, "parse_error", command, err.Error(), err, lineNumber)
+	}
+	if sawLine && !wroteEvent {
+		return nil
+	}
+	if !wroteEvent {
+		return writeJournalStatus(out, "empty", command, "journalctl returned no events", nil, 0)
+	}
+	return nil
+}
+
+func ParseJournalJSONLine(line string) (JournalEvent, error) {
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(line), &fields); err != nil {
+		return JournalEvent{}, err
+	}
+	event := JournalEvent{
+		Timestamp:          parseJournalTimestamp(firstJournalString(fields, "__REALTIME_TIMESTAMP", "_SOURCE_REALTIME_TIMESTAMP")),
+		Message:            redact.Text(firstJournalString(fields, "MESSAGE")),
+		Unit:               redact.Text(firstJournalString(fields, "_SYSTEMD_UNIT", "UNIT")),
+		SyslogIdentifier:   redact.Text(firstJournalString(fields, "SYSLOG_IDENTIFIER")),
+		PID:                journalIntPtr(firstJournalString(fields, "_PID", "SYSLOG_PID")),
+		UID:                journalIntPtr(firstJournalString(fields, "_UID")),
+		GID:                journalIntPtr(firstJournalString(fields, "_GID")),
+		BootID:             firstJournalString(fields, "_BOOT_ID"),
+		Priority:           journalIntPtr(firstJournalString(fields, "PRIORITY")),
+		Transport:          firstJournalString(fields, "_TRANSPORT"),
+		Cursor:             firstJournalString(fields, "__CURSOR"),
+		MonotonicTimestamp: firstJournalString(fields, "__MONOTONIC_TIMESTAMP"),
+		Sensitive:          true,
+	}
+	return event, nil
+}
+
+func writeJournalStatus(out *output.Manager, status, command, reason string, err error, lineNumber int) error {
+	record := JournalEvent{
+		RecordMeta:    out.Meta(collector, journalRel, command, "native_command", "medium"),
+		Exists:        false,
+		AbsentReason:  redact.Text(reason),
+		RecordSubtype: "status",
+		Status:        status,
+		Command:       redact.Text(command),
+		LineNumber:    lineNumber,
+		Sensitive:     true,
+	}
+	if err != nil {
+		record.Error = redact.Text(err.Error())
+	}
+	return out.AppendAIJSONL(journalRel, record, collector, command, "native_command", "medium")
+}
+
+func journalCommandLine(args []string) string {
+	parts := append([]string{"journalctl"}, args...)
+	return strings.Join(parts, " ")
+}
+
+func firstJournalString(fields map[string]any, names ...string) string {
+	for _, name := range names {
+		value := journalString(fields[name])
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func journalString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case float64:
+		return strconv.FormatInt(int64(typed), 10)
+	case []any:
+		for _, item := range typed {
+			if value := journalString(item); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func journalIntPtr(value string) *int {
+	if value == "" {
+		return nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func parseJournalTimestamp(value string) *time.Time {
+	if value == "" {
+		return nil
+	}
+	usec, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || usec <= 0 {
+		return parseISOTime(value)
+	}
+	t := time.Unix(usec/1_000_000, (usec%1_000_000)*1_000).UTC()
+	return &t
 }
 
 func parseLoginAccountingLog(out *output.Manager, log copiedLog) error {

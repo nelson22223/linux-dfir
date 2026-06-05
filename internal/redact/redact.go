@@ -14,6 +14,7 @@ var (
 	assignmentPattern    = regexp.MustCompile(`(?i)(\b[A-Za-z0-9_.-]*(?:password|passwd|token|secret|credential|private[_-]?key|pre[_-]?shared[_-]?key|presharedkey|psk|api[_-]?key|auth[_-]?key)[A-Za-z0-9_.-]*\s*=\s*)([^\s"'` + "`" + `]+)`)
 	quotedOptionPattern  = regexp.MustCompile(`(?i)(--?[A-Za-z0-9_.-]*(?:password|passwd|token|secret|credential|private[_-]?key|pre[_-]?shared[_-]?key|presharedkey|psk|api[_-]?key|auth[_-]?key)[A-Za-z0-9_.-]*(?:=|\s+))(["'` + "`" + `])([^"'` + "`" + `]+)(["'` + "`" + `])`)
 	optionPattern        = regexp.MustCompile(`(?i)(--?[A-Za-z0-9_.-]*(?:password|passwd|token|secret|credential|private[_-]?key|pre[_-]?shared[_-]?key|presharedkey|psk|api[_-]?key|auth[_-]?key)[A-Za-z0-9_.-]*(?:=|\s+))([^\s"'` + "`" + `]+)`)
+	privateKeyBlock      = regexp.MustCompile(`(?is)-+BEGIN [A-Z0-9 ]*PRIVATE KEY-+.*?-+END [A-Z0-9 ]*PRIVATE KEY-+`)
 	privateKeyMarker     = regexp.MustCompile(`(?i)-*BEGIN [A-Z0-9 ]*PRIVATE KEY-*|-*END [A-Z0-9 ]*PRIVATE KEY-*`)
 )
 
@@ -41,6 +42,7 @@ func Value(key, value string) string {
 }
 
 func Text(value string) string {
+	value = privateKeyBlock.ReplaceAllString(value, placeholder)
 	value = urlCredentialPattern.ReplaceAllString(value, `${1}`+placeholder+"@")
 	value = querySecretPattern.ReplaceAllString(value, `${1}`+placeholder)
 	value = quotedAssignPattern.ReplaceAllString(value, `${1}${2}`+placeholder+`${4}`)

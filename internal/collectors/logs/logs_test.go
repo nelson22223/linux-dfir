@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"linux-dfir/internal/collectors/common"
 	"linux-dfir/internal/evidence"
 	"linux-dfir/internal/output"
 )
@@ -211,11 +214,148 @@ func TestCollectMissingRootWritesAbsentAndErrors(t *testing.T) {
 	assertFileNotContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"stream":"errors"`)
 }
 
+func TestCollectJournalJSONEvents(t *testing.T) {
+	restore := setJournalRunnerForTest(func(ctx context.Context, command string, args ...string) common.CommandResult {
+		if command != "journalctl" {
+			t.Fatalf("unexpected command %s", command)
+		}
+		gotArgs := strings.Join(args, " ")
+		wantArgs := "-o json --no-pager -n 1000"
+		if gotArgs != wantArgs {
+			t.Fatalf("journalctl args = %q want %q", gotArgs, wantArgs)
+		}
+		output := `{"__REALTIME_TIMESTAMP":"1780471947141735","MESSAGE":"Started service --api-key super-secret-log","_SYSTEMD_UNIT":"ssh.service","SYSLOG_IDENTIFIER":"sshd","_PID":"123","_UID":"0","_GID":"0","_BOOT_ID":"boot-1","PRIORITY":"5","_TRANSPORT":"syslog","__CURSOR":"cursor-1","__MONOTONIC_TIMESTAMP":"999"}` + "\n"
+		return common.CommandResult{Command: command, Args: args, Output: []byte(output), Path: "/usr/bin/journalctl"}
+	})
+	defer restore()
+
+	out, outDir := newOutput(t)
+	if err := collectJournal(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+
+	evidencePath := filepath.Join(outDir, "ai/evidence.jsonl")
+	assertFileContains(t, filepath.Join(outDir, "ai/raw/logs/journalctl_json.out"), "Started service --api-key super-secret-log")
+	assertFileContains(t, filepath.Join(outDir, "legacy/logs/journalctl_json.out"), "Started service --api-key super-secret-log")
+	assertEvidenceRecord(t, evidencePath, "facts/journal_events", map[string]any{
+		"exists":              true,
+		"message":             "Started service --api-key [redacted]",
+		"unit":                "ssh.service",
+		"syslog_identifier":   "sshd",
+		"pid":                 123,
+		"uid":                 0,
+		"gid":                 0,
+		"boot_id":             "boot-1",
+		"priority":            5,
+		"transport":           "syslog",
+		"cursor":              "cursor-1",
+		"monotonic_timestamp": "999",
+		"raw_copy_ref":        "ai/raw/logs/journalctl_json.out",
+	})
+	assertFileContains(t, evidencePath, `"timestamp":"2026-06-03T07:32:27.141735Z"`)
+	assertFileNotContains(t, evidencePath, "super-secret-log")
+	assertJSONL(t, evidencePath)
+}
+
+func TestCollectJournalMissingWritesStatus(t *testing.T) {
+	restore := setJournalRunnerForTest(func(ctx context.Context, command string, args ...string) common.CommandResult {
+		return common.CommandResult{Command: command, Args: args, Err: exec.ErrNotFound}
+	})
+	defer restore()
+
+	out, outDir := newOutput(t)
+	if err := collectJournal(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+
+	assertEvidenceRecord(t, filepath.Join(outDir, "ai/evidence.jsonl"), "facts/journal_events", map[string]any{
+		"exists":         false,
+		"record_subtype": "status",
+		"status":         "absent",
+		"absent_reason":  "journalctl not found",
+	})
+}
+
+func TestCollectJournalCommandFailureWritesStatus(t *testing.T) {
+	restore := setJournalRunnerForTest(func(ctx context.Context, command string, args ...string) common.CommandResult {
+		return common.CommandResult{Command: command, Args: args, Output: []byte("failed token=super-secret-log\n"), Err: errors.New("exit status 1")}
+	})
+	defer restore()
+
+	out, outDir := newOutput(t)
+	if err := collectJournal(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+
+	evidencePath := filepath.Join(outDir, "ai/evidence.jsonl")
+	assertEvidenceRecord(t, evidencePath, "facts/journal_events", map[string]any{
+		"exists":        false,
+		"status":        "error",
+		"absent_reason": "exit status 1: failed token=[redacted]",
+		"error":         "exit status 1",
+	})
+	assertFileNotContains(t, evidencePath, "super-secret-log")
+}
+
+func TestCollectJournalRedactsPrivateKeyBlock(t *testing.T) {
+	restore := setJournalRunnerForTest(func(ctx context.Context, command string, args ...string) common.CommandResult {
+		message := "leaked -----BEGIN OPENSSH PRIVATE KEY-----\\nsecret-key-body\\n-----END OPENSSH PRIVATE KEY-----"
+		output := `{"__REALTIME_TIMESTAMP":"1780471947141735","MESSAGE":"` + message + `","_SYSTEMD_UNIT":"demo.service"}`
+		return common.CommandResult{Command: command, Args: args, Output: []byte(output + "\n"), Path: "/usr/bin/journalctl"}
+	})
+	defer restore()
+
+	out, outDir := newOutput(t)
+	if err := collectJournal(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+
+	evidencePath := filepath.Join(outDir, "ai/evidence.jsonl")
+	assertFileContains(t, evidencePath, "leaked [redacted]")
+	assertFileNotContains(t, evidencePath, "BEGIN OPENSSH PRIVATE KEY")
+	assertFileNotContains(t, evidencePath, "secret-key-body")
+	assertFileNotContains(t, evidencePath, "END OPENSSH PRIVATE KEY")
+}
+
+func TestCollectJournalInvalidJSONWritesStatus(t *testing.T) {
+	restore := setJournalRunnerForTest(func(ctx context.Context, command string, args ...string) common.CommandResult {
+		return common.CommandResult{Command: command, Args: args, Output: []byte("{not-json\n"), Path: "/usr/bin/journalctl"}
+	})
+	defer restore()
+
+	out, outDir := newOutput(t)
+	if err := collectJournal(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+
+	evidencePath := filepath.Join(outDir, "ai/evidence.jsonl")
+	assertEvidenceRecord(t, evidencePath, "facts/journal_events", map[string]any{
+		"exists":         false,
+		"record_subtype": "status",
+		"status":         "parse_error",
+		"line_number":    1,
+	})
+	assertFileNotContains(t, evidencePath, `"status":"empty"`)
+}
+
 func setLogTestHooks(root string) func() {
 	oldFilesystemRoot := filesystemRoot
+	oldJournalRunner := journalRunner
 	filesystemRoot = root
+	journalRunner = func(ctx context.Context, command string, args ...string) common.CommandResult {
+		return common.CommandResult{Command: command, Args: args, Err: exec.ErrNotFound}
+	}
 	return func() {
 		filesystemRoot = oldFilesystemRoot
+		journalRunner = oldJournalRunner
+	}
+}
+
+func setJournalRunnerForTest(runner func(context.Context, string, ...string) common.CommandResult) func() {
+	oldJournalRunner := journalRunner
+	journalRunner = runner
+	return func() {
+		journalRunner = oldJournalRunner
 	}
 }
 

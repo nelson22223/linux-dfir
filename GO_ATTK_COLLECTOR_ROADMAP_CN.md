@@ -43,6 +43,21 @@
 | 扫描插件 | 已完成 | scanner framework、scan none/tmbrfix/yara/osquery、tmbrfix payload hash/compatibility、stdout/stderr raw/legacy、scanner facts | 真实 tmbrfix/yara/osquery Linux 执行补测；默认仍不启用扫描 |
 | 端到端验收 | 已完成 | quick/standard/deep/minimal-safe smoke、JSONL parse、manifest/archive、Linux arm64 VM deep `--scan none`、原版 ATTK vs Go 非扫描对比 | amd64/RHEL/container/scanner 真实环境矩阵补测 |
 
+## 当前代码状态快照
+
+本节用于把“代码已经实现的 stream”和“后续增强计划”分开，避免把已做首轮的 P0 能力误读为完全缺失。
+
+| 能力 | 当前代码状态 | 已有 AI stream / 字段 | 仍需开发 |
+|---|---|---|---|
+| 会话观察 | 首轮已实现，仍需合并进程上下文 | `facts/session_observations`，覆盖 auth/audit、wtmp/btmp/utmp/lastlog、sudo actor/target/cwd/command、`login_session_id` | 与 `/proc/[pid]` start_time、session、tty、cgroup/container/ns 合并 |
+| 包完整性事实 | 首轮已实现，Debian/Ubuntu 优先 | `facts/package_integrity`，覆盖 dpkg `.list`、`.md5sums`、`.conffiles`、expected/actual hash、existence、size、mode、uid/gid、mtime | RHEL/rpm verify 真实变体、关键命令目录合并、更多 package owner 交叉事实 |
+| 内核安全 / 一致性 | 首轮已实现 | `facts/kernel_security`、`facts/kernel_consistency`，覆盖 module/proc/sysfs、module file hash、taint、lockdown、LSM、sysctl | module signature、secureboot hint、package owner、proc/sysfs 深层一致性 |
+| PAM 持久化 | 首轮已实现 | `facts/pam_persistence`，覆盖 `/etc/pam.d/*` 行解析、模块路径解析、hash/size/mode | module package owner、symlink target、include/substack 关联、发行版路径补测 |
+| Cron / 周期脚本 | 首轮已实现 | `facts/cron_entries`，覆盖 schedule/user/command、target_path、target_exists、target_mode、target_uid/gid、target_size、target_sha256 | interpreter 深层脚本、package owner、mtime |
+| Journal 事件 | 首轮已实现，待 Linux VM 真实 journal 补测 | `facts/journal_events`，覆盖 journal JSON event、absent/error/status、raw/legacy journalctl stdout、`raw_copy_ref` | timeout/empty/超长行/多值字段变体补测；真实 Linux journal 权限和输出变体补测 |
+| 进程谱系 | 部分覆盖，尚无专用合并 stream | 已有 `entities/process`、socket owner、container/cgroup/ns 原始事实 | 新增 `facts/process_lineage` 合并父子链、start_time、session、tty、exe hash/package、container/cgroup/ns |
+| 文件属性 / 变更 | 部分覆盖，尚无专用属性 stream | 已有 `entities/file`、`facts/file_hashes`、`facts/file_flags`、timeline | 新增/增强 xattr、capability、immutable、append-only、statx/btime、关键文件 mutation timeline |
+
 ## 当前采集缺失与优先级
 
 下面是当前 collector 后续缺口的总表。优先级按“对一次性应急采集 + AI 原生 parser 后续分析”的价值排序。表中只描述 collector 应采集的事实，不描述 parser 后续应输出的风险结论。
@@ -54,7 +69,7 @@
 | P0 | 内核一致性观察 | 部分覆盖 | 内核模块和内核安全状态的一致性事实，例如 loaded module、module file、hash、package、taint、lockdown、LSM/sysctl；module signature 作为后续增强 | `/proc/modules`、`/sys/module`、`/lib/modules/<kernel>`、`modules.dep`、`/proc/sys/kernel/*`、`/sys/kernel/security/*` | 支撑 rootkit 线索排查，发现 proc/sysfs/module 文件之间的不一致；collector 不输出 rootkit 结论 | `facts/kernel_consistency`、`facts/kernel_security` |
 | P0 | PAM 持久化 | 部分覆盖 | PAM 配置中的执行型或自定义模块事实，例如 `pam_exec.so`、`pam_python.so`、`pam_script.so`、非系统路径 `.so`、参数、hash；首轮已输出 `facts/pam_persistence`，覆盖 `/etc/pam.d/*` 行解析、模块路径解析、模块文件 hash/size/mode；package owner 后续增强 | `/etc/pam.d/*`、相关 PAM module 路径如 `/lib/security`、`/lib64/security`、`/usr/lib/security`、`/usr/lib64/security`、`/usr/lib/*/security` | PAM 是高价值持久化入口，攻击者可在登录、sudo、ssh 等认证流程中挂执行逻辑 | `facts/pam_persistence` |
 | P0 | Cron / 周期脚本增强 | 部分覆盖 | cron 入口已采到 schedule/user/command；首轮已把命令首个绝对路径和周期脚本自身关联为 target_path、target_exists、target_mode、target_uid/gid、target_size、target_sha256；interpreter 深层脚本、package owner、mtime 后续增强 | `/etc/crontab`、`/etc/cron.d/*`、`/etc/cron.hourly`、`/etc/cron.daily`、`/var/spool/cron*`、脚本实际路径 | cron 是最常见 Linux 持久化方式之一；把入口和脚本文件直接关联，AI 后续无需回翻 raw | 增强 `facts/cron_entries` |
-| P1 | Journal 事件 | 缺失/部分覆盖 | systemd journal 事件结构化，例如 unit、pid、uid、boot_id、priority、message、timestamp | `journalctl -o json --no-pager`、`/var/log/journal`、`/run/log/journal` | 现代 Linux 大量服务启动、失败、重启、登录和安全事件只在 journal 里完整出现，可补 syslog 缺口 | `facts/journal_events` |
+| P1 | Journal 事件 | 已完成首轮 | systemd journal 事件结构化，例如 unit、pid、uid、boot_id、priority、message、timestamp；命令不可用、权限不足、失败或 JSON 损坏时输出 status/error fact；stdout 保留 raw/legacy 复核副本 | `journalctl -o json --no-pager`、`/var/log/journal`、`/run/log/journal` | 现代 Linux 大量服务启动、失败、重启、登录和安全事件只在 journal 里完整出现，可补 syslog 缺口 | `facts/journal_events` |
 | P1 | 进程谱系事实 | 部分覆盖 | 进程父子链、start_time、session、tty、exe hash/package、namespace/cgroup/container 的合并事实 | `/proc/[pid]/stat`、`status`、`cmdline`、`exe`、`cwd`、`fd`、`cgroup`、`ns/*` | 帮 parser 从孤立进程记录升级为执行链，关联登录、sudo、网络外联和落地文件 | `facts/process_lineage` |
 | P1 | 文件变更 / 属性 | 部分覆盖 | 文件变化和扩展属性事实，例如 mtime/ctime/btime、xattr、capability、immutable、append-only、hash、package owner | 关键系统目录、webroot、tmp/dev_shm、persistence 指向文件、SUID/SGID 文件；可用 `statx`、xattr、capability、fs flags | 排查 webshell、落地文件、命令替换、权限隐藏和防删除手段；collector 只记录属性和时间事实 | `facts/file_attributes`、`facts/file_timeline` |
 | P1 | DHCP 租约 | 仅留原文 | DHCP 分配事实，例如 lease IP、router、DNS、DHCP server、lease start/end、interface | `/var/lib/dhcp/*`、`/var/lib/dhclient/*`、NetworkManager lease 目录 | 还原主机所在网络、历史 IP、DNS 和网关，辅助横向移动、资产定位和时间线解释 | `facts/dhcp_leases` |
@@ -67,9 +82,64 @@
 | P2 | 云 / 虚拟化线索 | 计划中 | 云和虚拟化资产事实，例如 DMI、cloud-init、instance-id、provider hint、metadata route hint | `/sys/class/dmi/id/*`、`/var/lib/cloud/*`、cloud-init 配置、路由表中的 metadata 地址 | 帮助定位云主机资产、镜像来源和实例身份，辅助报告和后续处置 | `entities/cloud_instance` |
 | P2 | 服务管理器兼容项 | 缺失/部分覆盖 | 非 systemd 服务管理器和应用级 scheduler 的启动项事实 | OpenRC、runit、supervisord、s6、应用自带 scheduler 配置 | 覆盖 Alpine、嵌入式、老发行版或特殊业务主机的自启动入口 | 增强 `facts/persistence_items` |
 
-## 建议执行顺序
+## 后续开发计划
 
-### Phase B：会话观察
+### Phase A1：Journal 事件结构化
+
+目标：补齐现代 Linux 的 systemd journal 事件事实，输出 `facts/journal_events`。
+
+当前进展：
+
+- 状态：已完成首轮实现。
+- DEV 子 agent：PASS，完成 `internal/collectors/logs` journal event 采集和 fixture 单测。
+- Review 子 agent：先 FAIL 后 PASS；blocking 为 private key block body 脱敏不足，已通过 `internal/redact` 整段 private key block redaction 修复并补测试。
+- Test 子 agent：PASS，覆盖 `go test ./internal/collectors/logs -count=1`、`go test ./...`、字段边界扫描、`git diff --check`、fake `journalctl` CLI smoke、JSONL 校验。
+- Main agent：完成 roadmap 对齐、raw/legacy journal stdout 保全、非法 JSON 状态去重、最终集成验收。
+
+Collector 工作：
+
+- 优先执行 `journalctl -o json --no-pager`，采集 stdout raw/legacy 复核面。
+- 解析 journal JSON 字段：timestamp、unit、pid、uid、gid、boot_id、priority、message、syslog_identifier、transport、cursor、monotonic timestamp 等存在字段。
+- `journalctl` 不存在、权限不足、返回错误、无事件或 JSON 行损坏时，输出明确 `facts/journal_events` status/error fact。
+- 对 message、command-like 字段使用统一脱敏；AI 结构化输出会整段替换 PEM/OpenSSH private key block，raw/legacy 保留原文用于证据保全。
+
+验收：
+
+- fixture 覆盖正常 JSON、缺失命令、命令失败、非法 JSON。
+- `go test ./internal/collectors/logs -count=1` 和 `go test ./...` 通过。
+- 不出现风险/结论字段。
+- 已用 fake `journalctl` 完成 mac CLI smoke：合法 JSONL、`facts/journal_events`、`raw_copy_ref`、raw/legacy journal stdout、parse_error 状态均正常。
+- Ubuntu ARM64 VM 后续 deep `--scan none` 抽样验证真实 systemd journal runtime；当前 mac 无法验证真实 journal 权限和输出变体。
+
+### Phase A2：Process Lineage
+
+目标：把已有 `entities/process`、session、network owner、container/cgroup/ns 事实合并为 AI 更易消费的 `facts/process_lineage`。
+
+Collector 工作：
+
+- 基于 `/proc/[pid]/stat`、`status`、`cmdline`、`exe`、`cwd`、`fd`、`cgroup`、`ns/*` 输出 ppid tree、start_time、session、tty、exe hash/package、container/cgroup/ns。
+- 与 socket owner、session_observations 通过稳定 key 关联，但不输出攻击链结论。
+
+验收：
+
+- fixture 覆盖父子进程、session/tty、exe hash、cgroup/ns。
+- parser 可以从 JSONL 构建进程执行图，不需要回读 legacy ps/lsof。
+
+### Phase A3：File Attributes / Timeline
+
+目标：补齐命令替换、webshell、SUID 后门和不可变属性排查所需文件事实。
+
+Collector 工作：
+
+- 对关键系统目录、webroot、tmp/dev_shm、persistence 指向文件、SUID/SGID 文件采集 xattr、capability、immutable、append-only、statx/btime fallback、hash、package owner。
+- 输出 `facts/file_attributes`，必要时增强 `facts/file_timeline`。
+
+验收：
+
+- fixture 覆盖 capability、xattr、immutable/append-only、btime fallback。
+- 不输出“异常/恶意”判断，只输出属性和时间事实。
+
+### Phase B：会话观察深化
 
 目标：补齐登录、sudo、TTY、session、进程的可关联事实字段。
 
