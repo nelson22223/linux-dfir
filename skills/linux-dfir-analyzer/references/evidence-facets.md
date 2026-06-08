@@ -112,3 +112,37 @@ Typical streams:
 - `facts/network_flows`
 
 Useful fields: `container_id`, `runtime`, `pod`, `namespace`, `image`, `cgroup`, `pid`, `mounts`, `host_path`.
+
+## browser
+
+Purpose: summarize browser activity metadata without treating raw browser databases as model input.
+
+Typical streams:
+
+- Browser collector records for profiles, history, downloads, cookies, bookmarks, and raw copy metadata.
+
+Useful fields: `browser_name`, `profile_name`, `user`, `url`, `host`, `download_path`, `timestamp`, `raw_copy_ref`, `source_path`.
+
+## quality
+
+Purpose: keep collection limitations separate from security conclusions.
+
+Typical streams:
+
+- `errors`
+- status records
+- absent facts
+- records with permission-denied issues
+
+Useful fields: `collector`, `error`, `absent_reason`, `exists`, `source_path`, `source_type`, `source_trust`, `issues`.
+
+## timeline
+
+Purpose: provide a lightweight ordering surface for follow-up analysis.
+
+Typical streams:
+
+- `timeline`
+- timestamped facts copied into other facets
+
+Useful fields: `timestamp`, `event`, `collector`, `summary`, `evidence_line`, `source_path`.

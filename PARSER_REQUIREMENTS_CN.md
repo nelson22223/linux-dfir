@@ -96,7 +96,7 @@ python3 skills/linux-dfir-analyzer/scripts/build_analysis_pack.py \
 | `collection_quality.json` | invalid JSON、error examples、absent/status/permission 质量事实 |
 | `facet_index.json` | 每个分析面的计数和样本文件位置 |
 | `top_values.json` | 常见 user、remote、unit、package、path、flow_kind 等高频值 |
-| `facet_samples/*.jsonl` | sessions、persistence、network、process、files_packages、kernel、logs、container 等分面代表样本 |
+| `facet_samples/*.jsonl` | sessions、persistence、network、process、files_packages、kernel、logs、container、browser、quality、timeline 等分面代表样本 |
 
 设计原则：
 
@@ -106,6 +106,59 @@ python3 skills/linux-dfir-analyzer/scripts/build_analysis_pack.py \
 - 分析面按 DFIR 任务组织，而不是按 collector 模块组织。
 - `collection_quality` 中的权限不足、日志缺失、`exists=false` 是采集事实，不直接等价于安全问题。
 - 后续可以把该 skill 安装到 `~/.codex/skills`，也可以将脚本演进为独立 parser CLI。
+
+## 两层分析编排
+
+### Layer 1：跨平台证据预处理
+
+目标：在 Windows / Linux / macOS 分析机上稳定运行，不依赖 bash、jq、sed、awk 或平台命令，只使用 Python 标准库流式读取 JSONL。
+
+职责：
+
+- 读取 `ai/evidence.jsonl`，不把全量文件放入 LLM 上下文。
+- 按 `stream` / `collector` / `record_type` 显式映射到 DFIR facet，未知新增 stream 再用关键词兜底。
+- 输出 `evidence_overview.json`、`collection_quality.json`、`facet_index.json`、`top_values.json` 和 `facet_samples/*.jsonl`。
+- 为每条样本保留 `evidence_line`、`stream`、`collector`、`source_path`、`raw_artifact_ref`，支持后续精确回查。
+- 只做分类、计数、抽样、压缩、质量统计，不做恶意判断。
+
+Layer 1 当前 facet：
+
+| Facet | 覆盖方向 |
+|---|---|
+| `sessions` | 登录、sudo、auth、wtmp/btmp/lastlog 派生事实 |
+| `persistence` | systemd、cron、PAM、shell profile、SSH、sudoers、rc/init、XDG |
+| `network` | socket、flow、DNS、route、ARP、DHCP、proxy/tunnel、command observation |
+| `process` | process entity、lineage、cmdline、cwd、exe、tty/session、cgroup/ns |
+| `files_packages` | file entity/hash/attribute/package owner、package integrity |
+| `kernel` | kernel module、kernel consistency/security、rootkit clue facts |
+| `logs` | auth/syslog/messages/audit/journal/timeline 支撑事件 |
+| `container` | runtime、container/cgroup/namespace 上下文 |
+| `browser` | browser history/download/cookie/bookmark metadata |
+| `quality` | errors、absent、permission、status、skipped 等采集质量事实 |
+
+### Layer 2：DFIR 分析与报告
+
+目标：基于 Layer 1 analysis pack 做真正分析。Layer 2 可以输出结论、置信度、优先级和建议，但每个 finding 必须引用 `evidence_line` 并保留反证/缺口。
+
+职责：
+
+- 单模块分析：sessions、persistence、network、process、files/packages、kernel、logs、container、browser。
+- 联合关联分析：
+  - remote -> user/session/tty -> sudo -> process -> file/network
+  - persistence entry -> target file/script -> hash/package/mtime -> process/network/log
+  - network endpoint -> socket inode -> pid/fd -> process/exe/user/session/container
+  - package integrity anomaly -> running process/persistence target/network behavior
+  - kernel consistency clue -> process/socket visibility gap -> command observation
+  - container process/network -> cgroup/ns -> host path/file impact
+- 场景化分析：根据用户预输入的疑似问题优先运行对应 playbook，例如 C2 外联、WebShell、挖矿、勒索、凭证窃取、Rootkit、命令替换、持久化排查。
+- 稳定报告输出：`report.md`、`report.json`、`timeline.jsonl`、`findings.json`、`entity_graph.json`、`collector_quality.json`、`evidence_refs.jsonl`。
+
+Layer 2 参考文件：
+
+```text
+skills/linux-dfir-analyzer/references/analysis-playbooks.md
+skills/linux-dfir-analyzer/references/report-contract.md
+```
 
 ## 首批 Parser 能力需求
 

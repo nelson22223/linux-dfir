@@ -12,6 +12,67 @@ from pathlib import Path
 from typing import Any
 
 
+STREAM_FACETS = {
+    "entities/container": ("container",),
+    "entities/file": ("files_packages",),
+    "entities/kernel_module": ("kernel",),
+    "entities/package": ("files_packages",),
+    "entities/persistence_file": ("persistence", "files_packages"),
+    "entities/process": ("process",),
+    "entities/socket": ("network",),
+    "entities/systemd_unit": ("persistence",),
+    "errors": ("quality",),
+    "facts/arp": ("network",),
+    "facts/audit_events": ("sessions", "logs"),
+    "facts/auth_events": ("sessions", "logs"),
+    "facts/command_observations": ("network", "files_packages"),
+    "facts/cron_entries": ("persistence",),
+    "facts/dhcp_leases": ("network",),
+    "facts/dns_config": ("network",),
+    "facts/file_attributes": ("files_packages",),
+    "facts/file_flags": ("files_packages",),
+    "facts/file_hashes": ("files_packages",),
+    "facts/file_package_owners": ("files_packages",),
+    "facts/journal_events": ("logs",),
+    "facts/kernel_consistency": ("kernel",),
+    "facts/kernel_security": ("kernel",),
+    "facts/log_events": ("logs", "sessions"),
+    "facts/network_counters": ("network",),
+    "facts/network_flows": ("network",),
+    "facts/network_persistence": ("network", "persistence"),
+    "facts/package_integrity": ("files_packages",),
+    "facts/pam_persistence": ("persistence",),
+    "facts/persistence_items": ("persistence",),
+    "facts/process_lineage": ("process",),
+    "facts/recent_files": ("files_packages",),
+    "facts/routes": ("network",),
+    "facts/session_observations": ("sessions",),
+    "timeline": ("timeline",),
+}
+
+STREAM_PREFIX_FACETS = (
+    ("entities/container", ("container",)),
+    ("facts/container", ("container",)),
+    ("facts/file_", ("files_packages",)),
+    ("facts/kernel_", ("kernel",)),
+    ("facts/network_", ("network",)),
+    ("facts/package_", ("files_packages",)),
+    ("facts/process_", ("process",)),
+    ("facts/session_", ("sessions",)),
+)
+
+COLLECTOR_FACETS = {
+    "browser": ("browser",),
+    "container": ("container",),
+    "files": ("files_packages",),
+    "kernel": ("kernel",),
+    "logs": ("logs",),
+    "network": ("network",),
+    "packages": ("files_packages",),
+    "persistence": ("persistence",),
+    "process": ("process",),
+}
+
 FACET_KEYWORDS = {
     "sessions": ("session", "auth", "login", "sudo", "wtmp", "btmp", "lastlog"),
     "persistence": (
@@ -47,6 +108,9 @@ FACET_KEYWORDS = {
     "kernel": ("kernel", "module", "rootkit", "sysctl", "taint", "lockdown", "lsm"),
     "logs": ("log", "journal", "audit", "syslog"),
     "container": ("container", "cgroup", "namespace", "podman", "docker", "kubernetes", "cri-o"),
+    "browser": ("browser", "history", "cookie", "bookmark", "download"),
+    "quality": ("error", "absent", "permission", "status", "skipped"),
+    "timeline": ("timeline",),
 }
 
 IMPORTANT_KEYS = {
@@ -159,17 +223,22 @@ def compact_data(data: Any, args: argparse.Namespace) -> Any:
 
 
 def record_facets(stream: str, collector: str, record_type: str, data: Any) -> list[str]:
+    facets = set(STREAM_FACETS.get(stream, ()))
+    for prefix, prefix_facets in STREAM_PREFIX_FACETS:
+        if stream.startswith(prefix):
+            facets.update(prefix_facets)
+    facets.update(COLLECTOR_FACETS.get(collector, ()))
+
     haystack = " ".join([stream, collector, record_type])
     if isinstance(data, dict):
         for key in ("category", "item_type", "entity_type", "event_type", "manager", "path", "source_file"):
             if key in data:
                 haystack += " " + str(data[key])
     haystack = haystack.lower()
-    facets = []
     for facet, keywords in FACET_KEYWORDS.items():
         if any(keyword in haystack for keyword in keywords):
-            facets.append(facet)
-    return facets or ["other"]
+            facets.add(facet)
+    return sorted(facets) or ["other"]
 
 
 def score_record(rec: dict[str, Any], data: Any) -> int:
@@ -395,6 +464,10 @@ def main() -> int:
             "5. `facet_samples/process.jsonl`",
             "6. `facet_samples/files_packages.jsonl`",
             "7. `facet_samples/kernel.jsonl`",
+            "8. `facet_samples/logs.jsonl`",
+            "9. `facet_samples/container.jsonl`",
+            "10. `facet_samples/browser.jsonl`",
+            "11. `facet_samples/timeline.jsonl`",
             "",
             "Use `evidence_line` to fetch exact source rows from the original JSONL when a finding needs proof.",
         ]

@@ -13,6 +13,11 @@ The collector records facts only. Analysis, findings, confidence, severity, and 
 
 ## Workflow
 
+Run two layers:
+
+- **Layer 1: Evidence preparation.** Build the compact analysis pack, classify records into facets, compute counts and quality signals, and preserve `evidence_line` for source lookup.
+- **Layer 2: DFIR analysis.** Apply the module playbooks, run cross-facet correlation, adapt to any user-provided suspected scenario, then write the stable report outputs.
+
 1. Locate the collector output:
    - Directory form: `<output>/ai/evidence.jsonl`
    - Archive form: extract the tarball to a temporary directory first.
@@ -42,6 +47,9 @@ Use `--evidence /path/to/ai/evidence.jsonl` if only the JSONL file is available.
    - `facet_samples/kernel.jsonl`: modules, kernel security, kernel consistency.
    - `facet_samples/logs.jsonl`: auth/syslog/audit/journal events.
    - `facet_samples/container.jsonl`: container, cgroup, namespace context.
+   - `facet_samples/browser.jsonl`: browser history, downloads, cookies, bookmarks.
+   - `facet_samples/quality.jsonl`: errors, absent facts, permission limits, skipped/status records.
+   - `facet_samples/timeline.jsonl`: collector timeline and time-ordered supporting facts.
 
 5. When a finding needs proof, cite:
    - `evidence_line`
@@ -61,25 +69,21 @@ python3 skills/linux-dfir-analyzer/scripts/extract_evidence_lines.py \
 
 6. If the analysis pack indicates missing permission, absent logs, invalid JSON, or excessive truncation, include this in the collection quality section rather than treating it as compromise.
 
+7. For Layer 2 analysis:
+   - Read `references/analysis-playbooks.md`.
+   - If the user provides a suspected scenario, run the matching scenario playbook first, then still complete the baseline module checks.
+   - Read `references/report-contract.md` before writing final outputs.
+
 ## Output Shape
 
-Produce human-facing reports with:
-
-1. Collection quality and evidence coverage.
-2. Executive triage summary.
-3. Timeline highlights.
-4. Account and session activity.
-5. Process and command execution.
-6. Network exposure and external connections.
-7. Persistence entries.
-8. File/package integrity and command replacement clues.
-9. Kernel/rootkit clues.
-10. Containers and namespaces.
-11. Findings with confidence and evidence references.
-12. Follow-up collection or validation steps.
+Produce the stable outputs described in `references/report-contract.md`.
 
 Keep the raw collector output immutable. Write parser outputs to a separate analysis directory.
 
 ## References
 
-Read `references/evidence-facets.md` when deciding which streams belong to which analysis surface.
+Read:
+
+- `references/evidence-facets.md` for Layer 1 facet definitions.
+- `references/analysis-playbooks.md` for Layer 2 module, correlation, and scenario analysis.
+- `references/report-contract.md` for stable report output.
