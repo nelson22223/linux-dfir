@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	defaultProfile = "standard"
+	defaultProfile = "deep"
 	defaultMode    = "dual"
 )
 

@@ -30,9 +30,8 @@ dist/dfir-collector-linux-386
 ## Basic Use
 
 ```sh
-./dist/dfir-collector-linux-amd64 --profile quick --output /tmp/dfir-quick
-./dist/dfir-collector-linux-amd64 --profile standard --output /tmp/dfir-standard
-./dist/dfir-collector-linux-amd64 --profile deep --output /tmp/dfir-deep --archive
+./dist/dfir-collector-linux-amd64 --output /tmp/dfir-case
+./dist/dfir-collector-linux-amd64 --output /tmp/dfir-case --archive
 ```
 
 Useful flags:
@@ -47,14 +46,14 @@ Useful flags:
 --timeout 10m
 ```
 
-Defaults are conservative: `--output-mode dual`, `--scan none`, and `--clean disabled`. If `--timeout` is omitted, the selected profile's `limits.timeout` is used.
+Defaults are incident-response oriented: `--profile deep`, `--output-mode dual`, `--scan none`, and `--clean disabled`. If `--timeout` is omitted, the selected profile's `limits.timeout` is used.
 
 ## Profiles
 
 - `minimal-safe`: low-sensitivity baseline metadata.
 - `quick`: fast first-response triage.
-- `standard`: default host/process/network/persistence/browser/file/package/log coverage.
-- `deep`: extended coverage including container context and scanner phase.
+- `standard`: host/process/network/persistence/browser/file/package/log coverage without container/scanner phase.
+- `deep`: default extended coverage including container context and scanner phase.
 - `phase*-...`: focused validation profiles used during implementation.
 
 ## Output
