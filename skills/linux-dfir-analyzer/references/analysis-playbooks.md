@@ -8,7 +8,7 @@ Layer 2 consumes the Layer 1 analysis pack. It may make judgments, assign confid
 2. Scenario focus: if the user provides a suspected incident type, run that scenario playbook first.
 3. Module playbooks: run sessions, persistence, network, process, files/packages, kernel, logs, and container checks.
 4. Correlation playbooks: connect entities across facets.
-5. Report: write outputs using `report-contract.md`.
+5. Report: write one human-readable `report.md` using `report-contract.md`; optional machine-readable support files go under `support/`.
 
 ## Module Playbooks
 

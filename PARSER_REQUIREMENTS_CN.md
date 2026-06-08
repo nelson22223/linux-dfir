@@ -151,7 +151,7 @@ Layer 1 当前 facet：
   - kernel consistency clue -> process/socket visibility gap -> command observation
   - container process/network -> cgroup/ns -> host path/file impact
 - 场景化分析：根据用户预输入的疑似问题优先运行对应 playbook，例如 C2 外联、WebShell、挖矿、勒索、凭证窃取、Rootkit、命令替换、持久化排查。
-- 稳定报告输出：`report.md`、`report.json`、`timeline.jsonl`、`findings.json`、`entity_graph.json`、`collector_quality.json`、`evidence_refs.jsonl`。
+- 稳定报告输出：必需输出一个人读 `report.md`；`report_data.json`、`timeline.jsonl`、`findings.json`、`entity_graph.json`、`collector_quality.json`、`evidence_refs.jsonl` 只作为可选 `support/` 附属产物，不视为报告本体。
 
 Layer 2 参考文件：
 
@@ -301,15 +301,10 @@ TimelineEvent
 
 ## 报告输出草案
 
-建议至少支持：
+报告本体必须是人读文件：
 
 ```text
 report.md
-report.json
-timeline.jsonl
-findings.json
-entity_graph.json
-collector_quality.json
 ```
 
 报告结构：
@@ -327,6 +322,17 @@ collector_quality.json
 11. 容器/云环境
 12. 证据附录
 13. 建议后续动作
+
+可选附属产物统一放在 `support/`：
+
+```text
+support/report_data.json
+support/timeline.jsonl
+support/findings.json
+support/entity_graph.json
+support/collector_quality.json
+support/evidence_refs.jsonl
+```
 
 ## 需要 Collector 继续补齐的字段
 

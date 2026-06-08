@@ -72,11 +72,11 @@ python3 skills/linux-dfir-analyzer/scripts/extract_evidence_lines.py \
 7. For Layer 2 analysis:
    - Read `references/analysis-playbooks.md`.
    - If the user provides a suspected scenario, run the matching scenario playbook first, then still complete the baseline module checks.
-   - Read `references/report-contract.md` before writing final outputs.
+   - Read `references/report-contract.md` before writing the human report.
 
 ## Output Shape
 
-Produce the stable outputs described in `references/report-contract.md`.
+Produce one human-readable report: `report.md`. Optional machine-readable support files may be written under `support/`, but they are not the report.
 
 Keep the raw collector output immutable. Write parser outputs to a separate analysis directory.
 
@@ -86,4 +86,4 @@ Read:
 
 - `references/evidence-facets.md` for Layer 1 facet definitions.
 - `references/analysis-playbooks.md` for Layer 2 module, correlation, and scenario analysis.
-- `references/report-contract.md` for stable report output.
+- `references/report-contract.md` for the human report format and optional support artifacts.

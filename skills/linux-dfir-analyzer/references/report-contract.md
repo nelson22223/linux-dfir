@@ -1,128 +1,99 @@
-# Stable Report Contract
+# Human Report Contract
 
-Write analysis outputs into a separate directory, for example `/tmp/linux-dfir-analysis-report`. Never modify the collector output.
-
-## Required Files
+The report is a human-readable incident response document. The required report output is one file:
 
 ```text
 report.md
-report.json
-timeline.jsonl
-findings.json
-entity_graph.json
-collector_quality.json
-evidence_refs.jsonl
 ```
 
+Machine-readable files are optional supporting artifacts. They are not the report. If generated, put them under `support/` so the output directory stays clear:
+
+```text
+support/report_data.json
+support/timeline.jsonl
+support/findings.json
+support/entity_graph.json
+support/collector_quality.json
+support/evidence_refs.jsonl
+```
+
+Never modify the collector output. Write the report and optional support files into a separate analysis directory, for example `/tmp/linux-dfir-report`.
+
 ## report.md
+
+Write for responders and customers. Avoid dumping raw JSON. Use tables, short finding cards, timelines, and evidence references.
 
 Use this section order:
 
 1. Executive Summary
-2. Collection Quality
-3. Scope And Time Range
-4. Key Findings
-5. Timeline Highlights
-6. Account And Session Activity
-7. Process And Command Execution
-8. Network Exposure And External Connections
-9. Persistence
-10. File And Package Integrity
-11. Kernel And Rootkit Clues
-12. Container Context
-13. Scenario-Specific Analysis
-14. Evidence Appendix
-15. Recommended Next Actions
+2. Scope And Collection Quality
+3. Key Findings
+4. Timeline Highlights
+5. Account And Session Activity
+6. Process And Command Execution
+7. Network Exposure And External Connections
+8. Persistence
+9. File And Package Integrity
+10. Kernel And Rootkit Clues
+11. Container Context
+12. Scenario-Specific Analysis
+13. Evidence Appendix
+14. Recommended Next Actions
 
 Every finding or important statement should cite evidence as `[E:<line>]`. If exact lines were not yet extracted, mark the report as draft.
 
-## report.json
+## Finding Card
 
-Use this shape:
+Use this shape inside `report.md`:
 
-```json
-{
-  "schema_version": "linux-dfir-report-v1",
-  "case_summary": {
-    "host": "",
-    "profile": "",
-    "time_range": {"start": "", "end": ""},
-    "scenario": "",
-    "overall_confidence": "low|medium|high"
-  },
-  "collection_quality": {
-    "status": "ok|partial|limited",
-    "limitations": [],
-    "source_gaps": []
-  },
-  "findings": [],
-  "timeline_refs": [],
-  "entity_graph_ref": "entity_graph.json",
-  "evidence_refs": []
-}
+```text
+### F-001 Finding Title
+
+- Category: sessions | persistence | network | process | files/packages | kernel | container | correlation
+- Confidence: low | medium | high
+- Summary: one short paragraph
+- Evidence: [E:1201], [E:1686]
+- Related entities: user/process/file/package/socket/unit/container where available
+- Counter-evidence / gaps: facts that weaken or limit the conclusion
+- Recommended validation: concrete next check
 ```
 
-## findings.json
+## Evidence Appendix
 
-Each finding:
+At the end of `report.md`, list cited evidence in a compact table:
 
-```json
-{
-  "id": "F-001",
-  "title": "",
-  "category": "sessions|persistence|network|process|files_packages|kernel|container|correlation",
-  "confidence": "low|medium|high",
-  "summary": "",
-  "evidence_lines": [],
-  "entities": {
-    "users": [],
-    "processes": [],
-    "files": [],
-    "packages": [],
-    "sockets": [],
-    "units": [],
-    "containers": []
-  },
-  "counter_evidence": [],
-  "gaps": [],
-  "recommended_validation": []
-}
+```text
+| Evidence | Stream | Collector | Source | Note |
+|---|---|---|---|---|
+| [E:1201] | facts/process_lineage | process | /proc/1/stat | Process lineage context |
 ```
 
-## timeline.jsonl
+Use `scripts/extract_evidence_lines.py` to create `support/evidence_refs.jsonl` when exact source rows are needed for auditability.
 
-Each line:
+## Optional Support Files
 
-```json
-{
-  "timestamp": "",
-  "time_confidence": "observed|inferred|unknown",
-  "category": "",
-  "summary": "",
-  "evidence_lines": [],
-  "entities": {}
-}
-```
+These files are useful for automation, review, or UI rendering, but they must not replace the human report.
 
-## entity_graph.json
+### support/report_data.json
 
-Use nodes and edges:
+Machine-readable mirror of the report structure.
 
-```json
-{
-  "nodes": [
-    {"id": "", "type": "user|session|process|file|package|socket|unit|container|host", "label": "", "evidence_lines": []}
-  ],
-  "edges": [
-    {"source": "", "target": "", "type": "logged_in|spawned|connected_to|loads|owns|persists|runs_as|in_container", "evidence_lines": []}
-  ]
-}
-```
+### support/findings.json
 
-## collector_quality.json
+Structured finding cards for downstream tools.
 
-Can copy or refine the analysis pack's `collection_quality.json`, but keep collector facts separate from security conclusions.
+### support/timeline.jsonl
 
-## evidence_refs.jsonl
+Normalized timeline events referenced by `report.md`.
 
-Store exact extracted source lines used in findings. Each line should include `_evidence_line`, original envelope fields, and original `data`.
+### support/entity_graph.json
+
+Nodes and edges used to explain relationships in the report.
+
+### support/collector_quality.json
+
+Copy or refine the analysis pack's collection quality facts. Keep collection limitations separate from security conclusions.
+
+### support/evidence_refs.jsonl
+
+Exact extracted source lines used in findings. Each line should include `_evidence_line`, original envelope fields, and original `data`.
