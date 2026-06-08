@@ -15,7 +15,6 @@ collectors:
   - packages
   - logs
   - container
-  - scanner
 limits:
   max_file_size: 524288000
   timeout: 45m

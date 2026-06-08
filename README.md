@@ -31,30 +31,41 @@ dist/dfir-collector-linux-386
 
 ```sh
 ./dist/dfir-collector-linux-amd64 --output /tmp/dfir-case
-./dist/dfir-collector-linux-amd64 --output /tmp/dfir-case --archive
 ```
 
 Useful flags:
 
 ```text
---profile quick|standard|deep|minimal-safe
 --output /path/to/output
---output-mode legacy|ai|dual
---archive
+--profile minimal-safe|quick|standard|deep
+--profile-dir profiles
 --scan none|tmbrfix|yara|osquery
 --clean disabled|confirm|force
 --timeout 10m
 ```
 
-Defaults are incident-response oriented: `--profile deep`, `--output-mode dual`, `--scan none`, and `--clean disabled`. If `--timeout` is omitted, the selected profile's `limits.timeout` is used.
+Defaults are incident-response oriented: `--profile deep`, dual output (`legacy/` plus `ai/`), automatic archive creation, `--scan none`, and `--clean disabled`. If `--timeout` is omitted, no overall collection timeout is applied.
 
 ## Profiles
+
+`--profile` selects a YAML collection profile from `--profile-dir`. A profile is a module set, not a case label: it defines which collectors run and a few collector-specific limits. The default `deep` profile is intended for normal one-shot incident response collection.
 
 - `minimal-safe`: low-sensitivity baseline metadata.
 - `quick`: fast first-response triage.
 - `standard`: host/process/network/persistence/browser/file/package/log coverage without container/scanner phase.
-- `deep`: default extended coverage including container context and scanner phase.
+- `deep`: default extended coverage including container context. Scanner plugins run only when `--scan` is set to `tmbrfix`, `yara`, or `osquery`.
 - `phase*-...`: focused validation profiles used during implementation.
+
+Profile files currently contain:
+
+```text
+name: profile identifier
+description: operator-facing summary
+collectors: ordered collector module list
+limits.journal_max_lines: journalctl line cap used by the logs collector
+limits.max_file_size: profile limit reserved for file-size bounded collection paths
+limits.timeout: legacy profile metadata; the CLI no longer applies it unless a future collector opts in explicitly
+```
 
 ## Output
 
@@ -72,7 +83,7 @@ In the default `dual` output mode, every run finalizes:
 
 AI consumers should treat `ai/evidence.jsonl` as the single structured evidence input. Each line is an envelope with `record_type`, `stream`, `collector`, source metadata, and a `data` object. Collection events, timeline records, errors, entity records, fact records, and artifact metadata all enter this one stream. The envelope owns evidence metadata; `data` should contain only collected fact fields. `manifest.json`, `artifact_index.json`, and `archive_summary.json` remain JSON control files for evidence-chain validation rather than event records. `ai/raw/` may contain copied binary/text source artifacts such as browser databases, logs, or scanner stdout/stderr.
 
-When `--archive` is set, the collector also creates:
+Every run also creates:
 
 ```text
 <output>.tar.gz

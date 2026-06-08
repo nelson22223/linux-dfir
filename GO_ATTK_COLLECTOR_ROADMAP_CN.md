@@ -39,7 +39,7 @@
 | 浏览器 / 历史记录 | 已完成 | Chrome/Chromium/Firefox profile discovery、SQLite raw copy + WAL/SHM、history/download/cookie/bookmark JSONL | live locked DB、其他用户权限、Firefox 版本差异 VM 补测 |
 | 日志 | 已完成 | auth/secure/syslog/messages/audit、rotated/compressed、wtmp/btmp/lastlog 结构化、ISO8601/classic syslog、timeline | journal events、audit rules absent fact、跨年 rotated log 时间推断 |
 | 容器 / Cgroup / Namespace | 已完成 | Docker/containerd/Podman/Kubernetes/CRI-O cgroup/ns/runtime metadata 关联、container facts/artifacts | overlay mount、host path mount、image digest、rootless runtime 实测 |
-| 归档 | 已完成 | tar.gz、整包 hash、manifest finalize、archive summary、路径安全校验、`--archive` | 真实大采集耗时/权限/跨文件系统输出补测 |
+| 归档 | 已完成 | 默认自动 tar.gz、整包 hash、manifest finalize、archive summary、路径安全校验 | 真实大采集耗时/权限/跨文件系统输出补测 |
 | 扫描插件 | 已完成 | scanner framework、scan none/tmbrfix/yara/osquery、tmbrfix payload hash/compatibility、stdout/stderr raw/legacy、scanner facts | 真实 tmbrfix/yara/osquery Linux 执行补测；默认仍不启用扫描 |
 | 端到端验收 | 已完成 | quick/standard/deep/minimal-safe smoke、JSONL parse、manifest/archive、Linux arm64 VM deep `--scan none`、原版 ATTK vs Go 非扫描对比 | amd64/RHEL/container/scanner 真实环境矩阵补测 |
 

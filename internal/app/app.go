@@ -23,20 +23,14 @@ import (
 
 const (
 	defaultProfile = "deep"
-	defaultMode    = "dual"
+	defaultMode    = string(output.ModeDual)
 )
 
 type Config struct {
-	Archive    bool
-	CaseID     string
 	CleanMode  string
-	Encrypt    bool
-	KeepWork   bool
 	OutputDir  string
-	OutputMode string
 	Profile    string
 	ProfileDir string
-	Redact     bool
 	Scan       string
 	Timeout    string
 }
@@ -54,7 +48,6 @@ func Run(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
-	cfg.OutputMode = strings.ToLower(cfg.OutputMode)
 	cfg.Scan = strings.ToLower(cfg.Scan)
 	cfg.CleanMode = strings.ToLower(cfg.CleanMode)
 
@@ -64,16 +57,15 @@ func Run(ctx context.Context, args []string) error {
 		return err
 	}
 	logs.Configure(logs.Options{JournalMaxLines: profileDef.Limits.JournalMaxLines})
-	effectiveTimeout := effectiveTimeout(cfg.Timeout, profileDef.Limits.Timeout)
-	runCtx, cancel := context.WithTimeout(ctx, effectiveTimeout)
+	runCtx, cancel, scannerTimeout := optionalTimeoutContext(ctx, cfg.Timeout)
 	defer cancel()
 
-	sess, err := session.New(cfg.CaseID, time.Now().UTC())
+	sess, err := session.New("", time.Now().UTC())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
-	out, err := output.New(cfg.OutputDir, cfg.OutputMode, sess)
+	out, err := output.New(cfg.OutputDir, defaultMode, sess)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return err
@@ -100,6 +92,7 @@ func Run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	finalCollectors := append([]string{}, profileDef.Collectors...)
 	registry := collectors.Registry()
 	for _, collectorName := range profileDef.Collectors {
 		if collectorName == "session" || collectorName == "scanner" {
@@ -149,7 +142,8 @@ func Run(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	if shouldRunScanner(cfg, profileDef.Collectors) {
+	if shouldRunScanner(cfg) {
+		finalCollectors = appendIfMissing(finalCollectors, "scanner")
 		if err := out.LogEvent(evidence.CollectionEvent{
 			Collector: "scanner",
 			Event:     "scanner_start",
@@ -158,7 +152,7 @@ func Run(ctx context.Context, args []string) error {
 		}); err != nil {
 			return err
 		}
-		if err := scanners.Run(runCtx, out, scanners.Options{Mode: cfg.Scan, CleanMode: cfg.CleanMode, PayloadRoot: "payload", Timeout: effectiveTimeout}); err != nil {
+		if err := scanners.Run(runCtx, out, scanners.Options{Mode: cfg.Scan, CleanMode: cfg.CleanMode, PayloadRoot: "payload", Timeout: scannerTimeout}); err != nil {
 			_ = out.Error(evidence.ErrorEvent{Collector: "scanner", Error: err.Error(), SourcePath: "scanner", SourceType: "scanner", SourceTrust: "medium"})
 			_ = writeCollectorStatus(out, "scanner", "error", err.Error())
 			return err
@@ -186,18 +180,16 @@ func Run(ctx context.Context, args []string) error {
 	if err := out.Timeline(timeline.SessionEvent("session_end", "collector session finalized", time.Now().UTC())); err != nil {
 		return err
 	}
-	if err := out.Finalize(cfg.OutputMode, profileDef.Name, profileDef.Collectors, time.Now().UTC()); err != nil {
+	if err := out.Finalize(defaultMode, profileDef.Name, finalCollectors, time.Now().UTC()); err != nil {
 		return err
 	}
-	if shouldArchive(cfg, profileDef.Name) {
-		if err := writeArchive(cfg.OutputDir, sess.SessionID); err != nil {
-			return err
-		}
+	if err := writeArchive(cfg.OutputDir, sess.SessionID); err != nil {
+		return err
 	}
 
 	fmt.Printf("linux-dfir collector initialized\n")
 	fmt.Printf("session=%s profile=%s collectors=%s output_mode=%s output=%s scan=%s clean=%s\n",
-		sess.SessionID, profileDef.Name, strings.Join(profileDef.Collectors, ","), cfg.OutputMode, cfg.OutputDir, cfg.Scan, cfg.CleanMode)
+		sess.SessionID, profileDef.Name, strings.Join(finalCollectors, ","), defaultMode, cfg.OutputDir, cfg.Scan, cfg.CleanMode)
 	return nil
 }
 
@@ -210,25 +202,18 @@ func parseArgs(args []string) (Config, error) {
 	cfg := Config{
 		CleanMode:  "disabled",
 		OutputDir:  filepath.Join("attk_log", "go-dev-session"),
-		OutputMode: defaultMode,
 		Profile:    defaultProfile,
 		ProfileDir: "profiles",
 		Scan:       "none",
 	}
 
 	fs := flag.NewFlagSet("dfir-collector", flag.ContinueOnError)
-	fs.BoolVar(&cfg.Archive, "archive", false, "create finalized tar.gz archive next to output directory")
-	fs.StringVar(&cfg.CaseID, "case-id", "", "case identifier")
 	fs.StringVar(&cfg.CleanMode, "clean", cfg.CleanMode, "clean mode: disabled, confirm, force")
-	fs.BoolVar(&cfg.Encrypt, "encrypt", false, "encrypt output archive")
-	fs.BoolVar(&cfg.KeepWork, "keep-workdir", false, "keep working directory")
 	fs.StringVar(&cfg.OutputDir, "output", cfg.OutputDir, "output directory")
-	fs.StringVar(&cfg.OutputMode, "output-mode", cfg.OutputMode, "output mode: legacy, ai, dual")
 	fs.StringVar(&cfg.Profile, "profile", cfg.Profile, "collection profile name under --profile-dir")
 	fs.StringVar(&cfg.ProfileDir, "profile-dir", cfg.ProfileDir, "directory containing collection profiles")
-	fs.BoolVar(&cfg.Redact, "redact", false, "redact sensitive fields where supported")
 	fs.StringVar(&cfg.Scan, "scan", cfg.Scan, "scanner: none, tmbrfix, yara, osquery")
-	fs.StringVar(&cfg.Timeout, "timeout", cfg.Timeout, "overall collection timeout")
+	fs.StringVar(&cfg.Timeout, "timeout", cfg.Timeout, "optional overall collection timeout, disabled when omitted")
 
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
@@ -241,9 +226,6 @@ func validateConfig(cfg Config) error {
 		return errors.New("output directory is required")
 	}
 
-	if !oneOf(cfg.OutputMode, "legacy", "ai", "dual") {
-		return fmt.Errorf("unsupported output mode: %s", cfg.OutputMode)
-	}
 	if !oneOf(cfg.Scan, "none", "tmbrfix", "yara", "osquery") {
 		return fmt.Errorf("unsupported scanner: %s", cfg.Scan)
 	}
@@ -255,38 +237,29 @@ func validateConfig(cfg Config) error {
 			return fmt.Errorf("unsupported timeout: %s", cfg.Timeout)
 		}
 	}
-	if cfg.Encrypt {
-		return errors.New("archive encryption is not implemented yet")
-	}
 	return nil
 }
 
-func shouldArchive(cfg Config, profileName string) bool {
-	return cfg.Archive || profileName == "phase12-archive"
+func shouldRunScanner(cfg Config) bool {
+	return strings.ToLower(cfg.Scan) != "none"
 }
 
-func shouldRunScanner(cfg Config, collectors []string) bool {
-	if strings.ToLower(cfg.Scan) != "none" {
-		return true
-	}
-	for _, collector := range collectors {
-		if collector == "scanner" {
-			return true
+func appendIfMissing(items []string, value string) []string {
+	for _, item := range items {
+		if item == value {
+			return items
 		}
 	}
-	return false
+	return append(items, value)
 }
 
-func effectiveTimeout(flagValue, profileValue string) time.Duration {
-	value := flagValue
+func optionalTimeoutContext(ctx context.Context, value string) (context.Context, context.CancelFunc, time.Duration) {
 	if value == "" {
-		value = profileValue
+		return ctx, func() {}, 0
 	}
-	timeout, err := time.ParseDuration(value)
-	if err != nil || timeout <= 0 {
-		return 10 * time.Minute
-	}
-	return timeout
+	timeout, _ := time.ParseDuration(value)
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	return runCtx, cancel, timeout
 }
 
 func writeArchive(outputDir, sessionID string) error {
