@@ -151,7 +151,7 @@ Layer 1 当前 facet：
   - kernel consistency clue -> process/socket visibility gap -> command observation
   - container process/network -> cgroup/ns -> host path/file impact
 - 场景化分析：根据用户预输入的疑似问题优先运行对应 playbook，例如 C2 外联、WebShell、挖矿、勒索、凭证窃取、Rootkit、命令替换、持久化排查。
-- 稳定报告输出：必需输出一个人读 `report.md`；`report_data.json`、`timeline.jsonl`、`findings.json`、`entity_graph.json`、`collector_quality.json`、`evidence_refs.jsonl` 只作为可选 `support/` 附属产物，不视为报告本体。
+- 稳定报告输出：必需输出一个人读 `report.md`，默认中文；除非用户明确要求英文或中英双语，否则不输出英文报告。`report_data.json`、`timeline.jsonl`、`findings.json`、`entity_graph.json`、`collector_quality.json`、`evidence_refs.jsonl` 只作为可选 `support/` 附属产物，不视为报告本体。
 
 Layer 2 参考文件：
 
@@ -301,7 +301,7 @@ TimelineEvent
 
 ## 报告输出草案
 
-报告本体必须是人读文件：
+报告本体必须是人读文件，默认中文输出：
 
 ```text
 report.md

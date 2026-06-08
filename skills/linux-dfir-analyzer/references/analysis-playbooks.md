@@ -233,14 +233,16 @@ Start from kernel consistency and package integrity facts, then compare running 
 
 ## Finding Rules
 
-Each finding must include:
+Each finding in `report.md` must use Chinese labels by default and include:
 
-- Title
-- Hypothesis or conclusion
-- Confidence: `low`, `medium`, or `high`
-- Evidence references: one or more `evidence_line` values
-- Correlated entities: user, process, file, package, socket, unit, container where available
-- Counter-evidence or gaps
-- Suggested next validation step
+- 标题
+- 假设或结论
+- 置信度：低、中、高
+- 证据引用：一个或多个 `evidence_line`
+- 关联实体：可用时包含 user、process、file、package、socket、unit、container
+- 反证或限制
+- 建议验证动作
+
+Optional support JSON may keep machine values such as `low`, `medium`, and `high`, but the human report remains Chinese unless the user asks otherwise.
 
 Do not write a finding when the only evidence is a missing source, permission error, or `exists=false` status. Report those under collection quality.

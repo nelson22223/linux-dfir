@@ -76,7 +76,7 @@ python3 skills/linux-dfir-analyzer/scripts/extract_evidence_lines.py \
 
 ## Output Shape
 
-Produce one human-readable report: `report.md`. Optional machine-readable support files may be written under `support/`, but they are not the report.
+Produce one human-readable report: `report.md`. Write it in Chinese by default unless the user explicitly asks for English or bilingual output. Optional machine-readable support files may be written under `support/`, but they are not the report.
 
 Keep the raw collector output immutable. Write parser outputs to a separate analysis directory.
 
