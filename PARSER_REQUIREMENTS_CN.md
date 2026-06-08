@@ -56,6 +56,57 @@ Parser 必须假设：
 | Evidence appendix | 复核人员 | 每个结论引用的 evidence line、source_path、raw_ref、hash |
 | Collector quality report | 工具维护者 | 采集缺口、权限失败、parser 无法使用的字段、重复/冲突数据 |
 
+## AI 分析 Skill / Parser 前置层原型
+
+当前默认 `deep` 在 Ubuntu ARM64 VM 上约产生 36 万行、300 MiB 的 `ai/evidence.jsonl`。这不适合直接放入 LLM 上下文。推荐架构是：
+
+```text
+collector output
+  -> streaming preprocessor / skill script
+  -> compact analysis pack
+  -> AI agent 按 facet 分析
+  -> 按 evidence_line 回查原始 JSONL / raw / legacy
+  -> report / findings / timeline / graph
+```
+
+已新增项目内 skill 原型：
+
+```text
+skills/linux-dfir-analyzer/
+  SKILL.md
+  references/evidence-facets.md
+  scripts/build_analysis_pack.py
+  scripts/extract_evidence_lines.py
+```
+
+使用方式：
+
+```sh
+python3 skills/linux-dfir-analyzer/scripts/build_analysis_pack.py \
+  --collector-output /path/to/collector-output \
+  --out /tmp/linux-dfir-analysis-pack
+```
+
+在当前 VM 样本上，`build_analysis_pack.py` 可将约 300 MiB / 36 万行 JSONL 流式压缩为约 600 KiB 的分析包，耗时约 4 秒。分析包包含：
+
+| 文件 | 作用 |
+|---|---|
+| `ai_context.md` | 给 AI 首读的轻量概览，包含行数、大小、top stream、top collector、facet 位置 |
+| `evidence_overview.json` | 机器可读总体计数、时间范围、top source path |
+| `collection_quality.json` | invalid JSON、error examples、absent/status/permission 质量事实 |
+| `facet_index.json` | 每个分析面的计数和样本文件位置 |
+| `top_values.json` | 常见 user、remote、unit、package、path、flow_kind 等高频值 |
+| `facet_samples/*.jsonl` | sessions、persistence、network、process、files_packages、kernel、logs、container 等分面代表样本 |
+
+设计原则：
+
+- Parser / skill 不直接吞全量 JSONL，而是先做 streaming index 和 bounded samples。
+- Compact pack 只作为分析入口，不替代原始证据；所有结论必须能回指 `evidence_line`。
+- 需要复核时，用 `extract_evidence_lines.py` 根据 `evidence_line` 抽取原始 JSONL 行。
+- 分析面按 DFIR 任务组织，而不是按 collector 模块组织。
+- `collection_quality` 中的权限不足、日志缺失、`exists=false` 是采集事实，不直接等价于安全问题。
+- 后续可以把该 skill 安装到 `~/.codex/skills`，也可以将脚本演进为独立 parser CLI。
+
 ## 首批 Parser 能力需求
 
 ### P0：证据装载与归一

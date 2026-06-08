@@ -1,0 +1,4 @@
+interface:
+  display_name: "Linux DFIR Analyzer"
+  short_description: "Analyze linux_dfir evidence JSONL outputs."
+  default_prompt: "Analyze this linux_dfir collector output and produce a triage-ready evidence summary."
