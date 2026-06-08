@@ -22,7 +22,7 @@ const (
 func enrichPlatformFileAttributes(actualPath string, info os.FileInfo, record *FileAttributeRecord) []FileAttributeIssue {
 	var issues []FileAttributeIssue
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		ctime := time.Unix(st.Ctim.Sec, st.Ctim.Nsec).UTC()
+		ctime := time.Unix(int64(st.Ctim.Sec), int64(st.Ctim.Nsec)).UTC()
 		record.CTime = &ctime
 	}
 	issues = append(issues, collectStatxBirthTime(actualPath, record)...)
