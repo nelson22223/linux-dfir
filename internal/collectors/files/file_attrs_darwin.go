@@ -24,6 +24,7 @@ func enrichPlatformFileAttributes(actualPath string, info os.FileInfo, record *F
 		}
 	}
 	issues = append(issues, collectDarwinXattrs(actualPath, record)...)
+	record.FSFlagsStatus = "unsupported"
 	issues = append(issues,
 		FileAttributeIssue{Field: "linux_capability", Status: "unsupported", Error: "Linux security.capability xattr is not supported on darwin"},
 		FileAttributeIssue{Field: "fs_flags", Status: "unsupported", Error: "FS_IOC_GETFLAGS is Linux-specific"},

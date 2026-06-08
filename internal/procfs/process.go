@@ -38,11 +38,11 @@ type Process struct {
 }
 
 type ReadIssue struct {
-	Path   string
-	Kind   string
-	FD     string
-	Error  string
-	IsRace bool
+	Path   string `json:"path"`
+	Kind   string `json:"kind"`
+	FD     string `json:"fd,omitempty"`
+	Error  string `json:"error"`
+	IsRace bool   `json:"is_race"`
 }
 
 type EnvironSummary struct {

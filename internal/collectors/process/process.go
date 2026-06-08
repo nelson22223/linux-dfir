@@ -24,29 +24,32 @@ const processLineageRel = "facts/process_lineage.jsonl"
 
 type ProcessRecord struct {
 	evidence.RecordMeta
-	EntityType   string                `json:"entity_type"`
-	EntityID     string                `json:"entity_id"`
-	Exists       bool                  `json:"exists"`
-	AbsentReason string                `json:"absent_reason,omitempty"`
-	PID          int                   `json:"pid"`
-	PPID         int                   `json:"ppid"`
-	UID          int                   `json:"uid"`
-	GID          int                   `json:"gid"`
-	Name         string                `json:"name"`
-	State        string                `json:"state"`
-	Cmdline      []string              `json:"cmdline"`
-	Environ      procfs.EnvironSummary `json:"environ"`
-	Exe          string                `json:"exe,omitempty"`
-	Cwd          string                `json:"cwd,omitempty"`
-	Root         string                `json:"root,omitempty"`
-	Path         string                `json:"path,omitempty"`
-	MapCount     int                   `json:"map_count"`
-	MapBytes     int64                 `json:"map_bytes"`
-	Maps         procfs.MapsSummary    `json:"maps"`
-	FDCount      int                   `json:"fd_count"`
-	FDs          []FDObservation       `json:"fds,omitempty"`
-	Issues       []procfs.ReadIssue    `json:"issues,omitempty"`
-	Sources      []evidence.SourceRef  `json:"sources,omitempty"`
+	EntityType     string                `json:"entity_type"`
+	EntityID       string                `json:"entity_id"`
+	Exists         bool                  `json:"exists"`
+	AbsentReason   string                `json:"absent_reason,omitempty"`
+	PID            int                   `json:"pid"`
+	PPID           int                   `json:"ppid"`
+	UID            int                   `json:"uid"`
+	GID            int                   `json:"gid"`
+	Name           string                `json:"name"`
+	State          string                `json:"state"`
+	ProcessKind    string                `json:"process_kind,omitempty"`
+	Cmdline        []string              `json:"cmdline"`
+	Environ        procfs.EnvironSummary `json:"environ"`
+	Exe            string                `json:"exe,omitempty"`
+	Cwd            string                `json:"cwd,omitempty"`
+	Root           string                `json:"root,omitempty"`
+	Path           string                `json:"path,omitempty"`
+	MapCount       int                   `json:"map_count"`
+	MapBytes       int64                 `json:"map_bytes"`
+	Maps           procfs.MapsSummary    `json:"maps"`
+	FDCount        int                   `json:"fd_count"`
+	FDs            []FDObservation       `json:"fds,omitempty"`
+	Issues         []procfs.ReadIssue    `json:"issues,omitempty"`
+	ExpectedAbsent []procfs.ReadIssue    `json:"expected_absent,omitempty"`
+	VolatileAbsent []procfs.ReadIssue    `json:"volatile_absent,omitempty"`
+	Sources        []evidence.SourceRef  `json:"sources,omitempty"`
 }
 
 type FDObservation struct {
@@ -98,6 +101,7 @@ type ProcessLineageRecord struct {
 	PPID             int                    `json:"ppid"`
 	ProcessName      string                 `json:"process_name"`
 	State            string                 `json:"state"`
+	ProcessKind      string                 `json:"process_kind,omitempty"`
 	UID              int                    `json:"uid"`
 	GID              int                    `json:"gid"`
 	Cmdline          []string               `json:"cmdline,omitempty"`
@@ -120,6 +124,8 @@ type ProcessLineageRecord struct {
 	LineageKey       string                 `json:"lineage_key"`
 	ParentKey        string                 `json:"parent_key,omitempty"`
 	Issues           []procfs.ReadIssue     `json:"issues,omitempty"`
+	ExpectedAbsent   []procfs.ReadIssue     `json:"expected_absent,omitempty"`
+	VolatileAbsent   []procfs.ReadIssue     `json:"volatile_absent,omitempty"`
 	Sources          []evidence.SourceRef   `json:"sources,omitempty"`
 }
 
@@ -157,7 +163,7 @@ func Collect(ctx context.Context, out *output.Manager) error {
 		if err := writeProcess(out, proc); err != nil {
 			return err
 		}
-		for _, issue := range proc.Issues {
+		for _, issue := range actionableIssues(proc, proc.Issues) {
 			if issue.IsRace {
 				continue
 			}
@@ -197,6 +203,8 @@ func writeAbsent(out *output.Manager, reason string) error {
 
 func writeProcess(out *output.Manager, proc procfs.Process) error {
 	sourcePath := filepath.Join(procRoot, fmt.Sprint(proc.PID))
+	processKind := processKind(proc)
+	issues, expectedAbsent, volatileAbsent := splitProcessIssues(proc, proc.Issues)
 	fds := make([]FDObservation, 0, len(proc.FDs)+len(proc.Issues))
 	for _, fd := range proc.FDs {
 		fds = append(fds, FDObservation{
@@ -206,13 +214,13 @@ func writeProcess(out *output.Manager, proc procfs.Process) error {
 			Type:   fd.Type,
 		})
 	}
-	if len(proc.FDs) == 0 && hasIssue(proc.Issues, "fd") {
+	if len(proc.FDs) == 0 && hasIssue(issues, "fd") {
 		fds = append(fds, FDObservation{
 			Exists:       false,
-			AbsentReason: issueReason(proc.Issues, "fd"),
+			AbsentReason: issueReason(issues, "fd"),
 		})
 	}
-	for _, issue := range proc.Issues {
+	for _, issue := range issues {
 		if issue.Kind != "fd_entry" {
 			continue
 		}
@@ -223,28 +231,31 @@ func writeProcess(out *output.Manager, proc procfs.Process) error {
 		})
 	}
 	record := ProcessRecord{
-		RecordMeta: out.Meta("process", "entities/process.jsonl", sourcePath, "procfs", "high"),
-		EntityType: "process",
-		EntityID:   fmt.Sprintf("process:%d", proc.PID),
-		Exists:     true,
-		PID:        proc.PID,
-		PPID:       proc.PPID,
-		UID:        proc.UID,
-		GID:        proc.GID,
-		Name:       proc.Name,
-		State:      proc.State,
-		Cmdline:    redact.Args(proc.Cmdline),
-		Environ:    procfs.SummarizeEnviron(proc.Environ),
-		Exe:        proc.Exe,
-		Cwd:        proc.Cwd,
-		Root:       proc.Root,
-		Path:       proc.Exe,
-		MapCount:   proc.Maps.Count,
-		MapBytes:   proc.Maps.Bytes,
-		Maps:       proc.Maps,
-		FDCount:    len(proc.FDs),
-		FDs:        fds,
-		Issues:     proc.Issues,
+		RecordMeta:     out.Meta("process", "entities/process.jsonl", sourcePath, "procfs", "high"),
+		EntityType:     "process",
+		EntityID:       fmt.Sprintf("process:%d", proc.PID),
+		Exists:         true,
+		PID:            proc.PID,
+		PPID:           proc.PPID,
+		UID:            proc.UID,
+		GID:            proc.GID,
+		Name:           proc.Name,
+		State:          proc.State,
+		ProcessKind:    processKind,
+		Cmdline:        redact.Args(proc.Cmdline),
+		Environ:        procfs.SummarizeEnviron(proc.Environ),
+		Exe:            proc.Exe,
+		Cwd:            proc.Cwd,
+		Root:           proc.Root,
+		Path:           proc.Exe,
+		MapCount:       proc.Maps.Count,
+		MapBytes:       proc.Maps.Bytes,
+		Maps:           proc.Maps,
+		FDCount:        len(proc.FDs),
+		FDs:            fds,
+		Issues:         issues,
+		ExpectedAbsent: expectedAbsent,
+		VolatileAbsent: volatileAbsent,
 		Sources: []evidence.SourceRef{
 			{SourcePath: filepath.Join(sourcePath, "status"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
 			{SourcePath: filepath.Join(sourcePath, "cmdline"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
@@ -299,6 +310,7 @@ func processLineageRecord(out *output.Manager, proc procfs.Process, keys map[int
 	issues := make([]procfs.ReadIssue, 0, len(proc.Issues)+len(exeIssues))
 	issues = append(issues, proc.Issues...)
 	issues = append(issues, exeIssues...)
+	actionable, expectedAbsent, volatileAbsent := splitProcessIssues(proc, issues)
 	record := ProcessLineageRecord{
 		RecordMeta:       out.Meta("process", processLineageRel, sourcePath, "procfs", "high"),
 		EntityType:       "process_lineage",
@@ -308,6 +320,7 @@ func processLineageRecord(out *output.Manager, proc procfs.Process, keys map[int
 		PPID:             proc.PPID,
 		ProcessName:      proc.Name,
 		State:            proc.State,
+		ProcessKind:      processKind(proc),
 		UID:              proc.UID,
 		GID:              proc.GID,
 		Cmdline:          redact.Args(proc.Cmdline),
@@ -328,7 +341,9 @@ func processLineageRecord(out *output.Manager, proc procfs.Process, keys map[int
 		Namespaces:       proc.Namespaces,
 		LineageKey:       keys[proc.PID],
 		ParentKey:        parentKey,
-		Issues:           issues,
+		Issues:           actionable,
+		ExpectedAbsent:   expectedAbsent,
+		VolatileAbsent:   volatileAbsent,
 		Sources: []evidence.SourceRef{
 			{SourcePath: filepath.Join(sourcePath, "status"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
 			{SourcePath: filepath.Join(sourcePath, "stat"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
@@ -341,7 +356,68 @@ func processLineageRecord(out *output.Manager, proc procfs.Process, keys map[int
 			{SourcePath: filepath.Join(sourcePath, "ns"), SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"},
 		},
 	}
-	return record, exeIssues
+	return record, actionableIssues(proc, exeIssues)
+}
+
+func actionableIssues(proc procfs.Process, issues []procfs.ReadIssue) []procfs.ReadIssue {
+	actionable, _, _ := splitProcessIssues(proc, issues)
+	return actionable
+}
+
+func splitProcessIssues(proc procfs.Process, issues []procfs.ReadIssue) ([]procfs.ReadIssue, []procfs.ReadIssue, []procfs.ReadIssue) {
+	if len(issues) == 0 {
+		return nil, nil, nil
+	}
+	actionable := make([]procfs.ReadIssue, 0, len(issues))
+	expected := make([]procfs.ReadIssue, 0)
+	volatile := make([]procfs.ReadIssue, 0)
+	for _, issue := range issues {
+		if expectedProcessIssue(proc, issue) {
+			expected = append(expected, issue)
+			continue
+		}
+		if issue.IsRace {
+			volatile = append(volatile, issue)
+			continue
+		}
+		actionable = append(actionable, issue)
+	}
+	return actionable, expected, volatile
+}
+
+func expectedProcessIssue(proc procfs.Process, issue procfs.ReadIssue) bool {
+	if processKind(proc) != "kernel_thread" {
+		return false
+	}
+	switch issue.Kind {
+	case "cmdline", "environ", "exe", "cwd", "root", "maps", "fd", "exe_metadata", "exe_hash":
+		return true
+	default:
+		return false
+	}
+}
+
+func processKind(proc procfs.Process) string {
+	if len(proc.Cmdline) == 0 && proc.Exe == "" && kernelThreadHint(proc) {
+		return "kernel_thread"
+	}
+	return "user_process"
+}
+
+func kernelThreadHint(proc procfs.Process) bool {
+	if proc.PID == 2 || proc.PPID == 2 {
+		return true
+	}
+	if strings.Contains(proc.State, "(idle)") {
+		return true
+	}
+	name := proc.Name
+	for _, prefix := range []string{"kworker/", "ksoftirqd/", "migration/", "idle_inject/", "cpuhp/", "irq/", "rcu_", "watchdog/", "kswapd", "kcompactd", "khugepaged", "jbd2/", "kauditd", "kthreadd"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type exeMetadata struct {

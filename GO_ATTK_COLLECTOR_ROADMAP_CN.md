@@ -1,6 +1,6 @@
 # Go ATTK Collector 总路线图
 
-更新时间：2026-06-05
+更新时间：2026-06-08
 
 本文是 Go ATTK / Linux DFIR collector 的主 roadmap。`PHASE_STATUS_CN.md` 已转为 Phase 1-14 的历史执行留档；后续采集器实现进度、缺口、优先级和验收标准以本文为准。Parser / AI agent 的需求池见 `PARSER_REQUIREMENTS_CN.md`。
 
@@ -32,8 +32,8 @@
 | 主机 / 系统 / 用户 / 磁盘 / 时间 | 已完成 | 主机基础信息、OS、kernel、users/groups、SSH host key metadata、mount/time、文件 metadata timeline | privileged/login_capable 等账户事实可增强 |
 | 内核 | 已完成 | `/proc/modules`、`/sys/module`、cmdline、tainted、kernel module entities、module metadata | rootkit 一致性事实、module signature、lockdown/LSM/sysctl 深化 |
 | 进程 | 已完成 | `/proc/[pid]` 直接采集、cmdline/environ summary/exe/cwd/root/maps/fd、legacy ps/lsof 合成、权限/race 记录 | process lineage、session/tty、start_time、container/cgroup/ns 合并 |
-| 网络 | 已完成 | `/proc/net` socket/route/arp/interface、socket inode -> PID/FD、hosts/resolv、firewall status、conntrack、flow enrichment、proxy/tunnel config | DHCP leases、proc net counters、DNS runtime、native command cross-check |
-| 持久化 | 已完成 | cron、rc/init、system/user systemd、drop-in/enabled symlink、SSH authorized_keys/config、shell profile、sudoers、loader、at、XDG autostart、私钥 redaction | PAM persistence、anacron/at 语义、init script 命令、service manager 兼容项 |
+| 网络 | 已完成 | `/proc/net` socket/route/arp/interface、socket inode -> PID/FD、hosts/resolv、firewall status、conntrack、flow enrichment、proxy/tunnel config、DHCP leases、DNS runtime、IPv6 route/neighbor、proc net counters、native command cross observation | IPv4 neighbor state、policy route 原生结构化、RHEL/NetworkManager/IPv6-only/容器宿主机矩阵补测 |
+| 持久化 | 已完成 | cron、rc/init、system/user systemd、drop-in/enabled symlink、SSH authorized_keys/config、shell profile、sudoers、loader、at/anacron、XDG autostart、PAM include/substack/module metadata、周期脚本 interpreter/hash/package owner、私钥 redaction | OpenRC/runit/supervisord/s6 等 service manager 兼容项、发行版矩阵补测 |
 | 文件枚举 | 已完成 | 模块文件、打开文件、autorun 文件、SUID/SGID、tmp/recent、webroot、hash、package owner、file flags、collector artifact 过滤 | xattr/capability/immutable/append-only、btime、关键文件 mutation timeline |
 | 软件包 | 已完成 | dpkg/rpm 包清单、dpkg multi-arch、md5sums、rpm native fallback、文件包归属 | package integrity verify、conffiles、expected/actual hash、RHEL rpm 变体实测 |
 | 浏览器 / 历史记录 | 已完成 | Chrome/Chromium/Firefox profile discovery、SQLite raw copy + WAL/SHM、history/download/cookie/bookmark JSONL | live locked DB、其他用户权限、Firefox 版本差异 VM 补测 |
@@ -52,11 +52,17 @@
 | 会话观察 | 首轮已实现，仍需合并进程上下文 | `facts/session_observations`，覆盖 auth/audit、wtmp/btmp/utmp/lastlog、sudo actor/target/cwd/command、`login_session_id` | 与 `/proc/[pid]` start_time、session、tty、cgroup/container/ns 合并 |
 | 包完整性事实 | 首轮已实现，Debian/Ubuntu 优先 | `facts/package_integrity`，覆盖 dpkg `.list`、`.md5sums`、`.conffiles`、expected/actual hash、existence、size、mode、uid/gid、mtime | RHEL/rpm verify 真实变体、关键命令目录合并、更多 package owner 交叉事实 |
 | 内核安全 / 一致性 | 首轮已实现 | `facts/kernel_security`、`facts/kernel_consistency`，覆盖 module/proc/sysfs、module file hash、taint、lockdown、LSM、sysctl | module signature、secureboot hint、package owner、proc/sysfs 深层一致性 |
-| PAM 持久化 | 首轮已实现 | `facts/pam_persistence`，覆盖 `/etc/pam.d/*` 行解析、模块路径解析、hash/size/mode | module package owner、symlink target、include/substack 关联、发行版路径补测 |
-| Cron / 周期脚本 | 首轮已实现 | `facts/cron_entries`，覆盖 schedule/user/command、target_path、target_exists、target_mode、target_uid/gid、target_size、target_sha256 | interpreter 深层脚本、package owner、mtime |
-| Journal 事件 | 首轮已实现，待 Linux VM 真实 journal 补测 | `facts/journal_events`，覆盖 journal JSON event、absent/error/status、raw/legacy journalctl stdout、`raw_copy_ref` | timeout/empty/超长行/多值字段变体补测；真实 Linux journal 权限和输出变体补测 |
-| 进程谱系 | 首轮已实现，待 Linux VM 真实 `/proc` 补测 | `facts/process_lineage`，合并 pid/ppid、lineage_key/parent_key、start_time_ticks、session、tty、cmdline、exe hash/metadata、cgroup、namespace | package owner、真实 Linux cgroup/ns/exe deleted 场景补测、与 session/network/container 更深关联 |
-| 文件属性 / 变更 | 首轮已实现，待 Linux VM 真实属性补测 | `facts/file_attributes`，复用现有文件枚举目标，覆盖 mode/uid/gid/size/mtime/ctime/birth_time、sha256/hash_status、xattr names/count、Linux capability、fs flags、immutable、append_only、issues | package owner 合并、关键文件 mutation timeline、真实 Linux xattr/capability/immutable/statx 补测 |
+| PAM 持久化 | 已完成 PN1 | `facts/pam_persistence`，覆盖 `/etc/pam.d/*` 行解析、模块路径解析、hash/size/mode、module symlink target、package owner、include/substack target、module directory source | 发行版路径和非标准 PAM module 目录补测 |
+| Cron / 周期脚本 | 已完成 PN1 | `facts/cron_entries`，覆盖 schedule/user/command、target_path、target_exists、target_mode、target_uid/gid、target_size、target_sha256、interpreter、script_path、script_mtime/ctime、script package owner | 复杂 shell 展开语义不在 collector 内模拟；更多发行版 cron spool 权限补测 |
+| anacron / at / rc / XDG | 已完成 PN1 | `facts/persistence_items`，覆盖 anacron schedule/job/command、at job user/run_time_hint/environment、rc/init/upstart command-like 行、XDG TryExec/OnlyShowIn/NotShowIn/Terminal/enabled、target metadata | OpenRC/runit/supervisord/s6 等 service manager 兼容项 |
+| Journal 事件 | 已完成并通过 Ubuntu ARM64 VM 实采验证 | `facts/journal_events`，覆盖 journal JSON event、absent/error/status、raw/legacy journalctl stdout、`raw_copy_ref`；`journal_max_lines` 按 profile 控制，standard=5000、deep=20000 | timeout/empty/超长行/多值字段变体继续补测；后续可增加按时间窗口采集 |
+| 进程谱系 | 已完成并通过 Ubuntu ARM64 VM 实采验证 | `facts/process_lineage`，合并 pid/ppid、lineage_key/parent_key、start_time_ticks、session、tty、cmdline、exe hash/metadata、cgroup、namespace；kernel thread 预期缺失进入 `expected_absent`，procfs race 进入 `volatile_absent` | package owner、真实 `/proc/[pid]/exe` deleted/replaced 场景补测、与 session/network/container 更深关联 |
+| 文件属性 / 变更 | 已完成并通过 Ubuntu ARM64 VM 实采验证 | `facts/file_attributes`，复用现有文件枚举目标，覆盖 mode/uid/gid/size/mtime/ctime/birth_time、sha256/hash_status、xattr names/count、Linux capability、fs flags、immutable、append_only、`fs_flags_status`；symlink 的 fs flags 标记为 `not_applicable` | package owner 合并、关键文件 mutation timeline、真实 immutable/append-only 场景补测 |
+| DHCP 租约 | 已完成 PN2 | `facts/dhcp_leases`，覆盖 dhclient/ISC lease 和 NetworkManager 常见 lease 目录，输出 interface、address、router、dns、server、lease start/end/renew/rebind、source path | RHEL/NetworkManager 变体补测 |
+| DNS runtime | 已完成 PN2 | `facts/dns_config`，覆盖 `/etc/resolv.conf`、systemd-resolved runtime/static、NetworkManager runtime/static、dnsmasq config，区分 manager、runtime/static、stub resolver、source | resolved/dbus 状态、dnsmasq cache 和更多发行版变体补测 |
+| 网络外联上下文 | 已完成 PN2 | `facts/network_flows`，覆盖 socket endpoint、owner process、owner lineage key、session id、container/cgroup、route interface hint、DNS source hint；无 flow 时输出 absent fact | IPv4 neighbor state、policy route 原生结构化、conntrack/flow 更深关联 |
+| 原生命令交叉观察 | 已完成 PN2 | `facts/command_observations`，覆盖 `ip`、`ss`、`netstat`、`lsof`、`route`、`arp` 的 path/hash/package owner、exit status、line count、parsed summary | 被替换命令差异由 parser 分析，collector 只记录事实 |
+| proc/net 计数器 | 已完成 PN2 | `facts/network_counters`，覆盖 `/proc/net/snmp`、`/proc/net/snmp6`、`/proc/net/netstat` 的协议计数器 | 计数器异常解释留给 parser |
 
 ## 当前采集缺失与优先级
 
@@ -67,22 +73,93 @@
 | P0 | 会话观察 | 部分覆盖 | 当前登录会话、历史登录、sudo 会话和 TTY 的可关联事实字段，例如 user、remote、tty、pid、`login_session_id`、sudo target_user、command cwd；首轮已输出 `facts/session_observations`，覆盖 auth/audit 日志和 wtmp/btmp/utmp/lastlog 派生事实 | `/var/run/utmp`、`/var/log/wtmp`、`/var/log/btmp`、`/var/log/lastlog`、`/var/log/auth.log`、`/var/log/secure`、`/proc/[pid]` | 帮 parser 还原“谁从哪里登录、切到什么权限、执行了什么命令”，是时间线和入侵入口分析的核心；下一步继续合并 `/proc/[pid]` 的 start_time、session、tty、cgroup/container 上下文 | `facts/session_observations` |
 | P0 | 包完整性事实 | 部分覆盖 | 包数据库中的 expected hash、磁盘实际文件 hash、mtime、owner、存在性和权限元数据事实 | Debian/Ubuntu: `/var/lib/dpkg/status`、`.list`、`.md5sums`、`conffiles`；RHEL: rpmdb、`rpm -Va`；关键目录 `/bin`、`/sbin`、`/usr/bin`、`/usr/sbin` | 应对命令替换、系统工具被感染、包文件被删除或篡改；collector 只记录可复核事实，不判断恶意 | `facts/package_integrity` |
 | P0 | 内核一致性观察 | 部分覆盖 | 内核模块和内核安全状态的一致性事实，例如 loaded module、module file、hash、package、taint、lockdown、LSM/sysctl；module signature 作为后续增强 | `/proc/modules`、`/sys/module`、`/lib/modules/<kernel>`、`modules.dep`、`/proc/sys/kernel/*`、`/sys/kernel/security/*` | 支撑 rootkit 线索排查，发现 proc/sysfs/module 文件之间的不一致；collector 不输出 rootkit 结论 | `facts/kernel_consistency`、`facts/kernel_security` |
-| P0 | PAM 持久化 | 部分覆盖 | PAM 配置中的执行型或自定义模块事实，例如 `pam_exec.so`、`pam_python.so`、`pam_script.so`、非系统路径 `.so`、参数、hash；首轮已输出 `facts/pam_persistence`，覆盖 `/etc/pam.d/*` 行解析、模块路径解析、模块文件 hash/size/mode；package owner 后续增强 | `/etc/pam.d/*`、相关 PAM module 路径如 `/lib/security`、`/lib64/security`、`/usr/lib/security`、`/usr/lib64/security`、`/usr/lib/*/security` | PAM 是高价值持久化入口，攻击者可在登录、sudo、ssh 等认证流程中挂执行逻辑 | `facts/pam_persistence` |
-| P0 | Cron / 周期脚本增强 | 部分覆盖 | cron 入口已采到 schedule/user/command；首轮已把命令首个绝对路径和周期脚本自身关联为 target_path、target_exists、target_mode、target_uid/gid、target_size、target_sha256；interpreter 深层脚本、package owner、mtime 后续增强 | `/etc/crontab`、`/etc/cron.d/*`、`/etc/cron.hourly`、`/etc/cron.daily`、`/var/spool/cron*`、脚本实际路径 | cron 是最常见 Linux 持久化方式之一；把入口和脚本文件直接关联，AI 后续无需回翻 raw | 增强 `facts/cron_entries` |
+| P0 | PAM 持久化 | 已完成 PN1 | PAM 配置中的执行型或自定义模块事实，例如 `pam_exec.so`、`pam_python.so`、`pam_script.so`、非系统路径 `.so`、参数、hash、package owner、symlink target、include/substack target | `/etc/pam.d/*`、相关 PAM module 路径如 `/lib/security`、`/lib64/security`、`/usr/lib/security`、`/usr/lib64/security`、`/usr/lib/*/security` | PAM 是高价值持久化入口，攻击者可在登录、sudo、ssh 等认证流程中挂执行逻辑 | `facts/pam_persistence` |
+| P0 | Cron / 周期脚本增强 | 已完成 PN1 | cron 入口已采到 schedule/user/command，并把命令首个绝对路径和周期脚本关联为 target_path、target_exists、target_mode、target_uid/gid、target_size、target_sha256、interpreter、script_path、mtime/ctime、package owner | `/etc/crontab`、`/etc/cron.d/*`、`/etc/cron.hourly`、`/etc/cron.daily`、`/var/spool/cron*`、脚本实际路径 | cron 是最常见 Linux 持久化方式之一；把入口和落地脚本放在同一事实里，AI 后续无需回翻 raw | 增强 `facts/cron_entries` |
 | P1 | Journal 事件 | 已完成首轮 | systemd journal 事件结构化，例如 unit、pid、uid、boot_id、priority、message、timestamp；命令不可用、权限不足、失败或 JSON 损坏时输出 status/error fact；stdout 保留 raw/legacy 复核副本 | `journalctl -o json --no-pager`、`/var/log/journal`、`/run/log/journal` | 现代 Linux 大量服务启动、失败、重启、登录和安全事件只在 journal 里完整出现，可补 syslog 缺口 | `facts/journal_events` |
 | P1 | 进程谱系事实 | 已完成首轮 | 进程父子链、start_time、session、tty、exe hash/metadata、namespace/cgroup 的合并事实；exe hash/stat 基于 `/proc/[pid]/exe` link path，避免进程文件替换后 hash 当前路径 | `/proc/[pid]/stat`、`status`、`cmdline`、`exe`、`cwd`、`fd`、`cgroup`、`ns/*` | 帮 parser 从孤立进程记录升级为执行链，关联登录、sudo、网络外联和落地文件 | `facts/process_lineage` |
 | P1 | 文件变更 / 属性 | 已完成首轮 | 文件变化和扩展属性事实，例如 mtime/ctime/btime、xattr names/count、Linux capability、immutable、append-only、hash；首轮不新增全盘扫描，只复用现有 file enum 目标 | 关键系统目录、webroot、tmp/dev_shm、persistence 指向文件、SUID/SGID 文件；Linux 使用 `statx`、xattr、`FS_IOC_GETFLAGS` | 排查 webshell、落地文件、命令替换、权限隐藏和防删除手段；collector 只记录属性和时间事实 | `facts/file_attributes`、`facts/file_timeline` |
-| P1 | DHCP 租约 | 仅留原文 | DHCP 分配事实，例如 lease IP、router、DNS、DHCP server、lease start/end、interface | `/var/lib/dhcp/*`、`/var/lib/dhclient/*`、NetworkManager lease 目录 | 还原主机所在网络、历史 IP、DNS 和网关，辅助横向移动、资产定位和时间线解释 | `facts/dhcp_leases` |
-| P1 | DNS 运行时解析器 | 缺失/部分覆盖 | 运行时 DNS 配置和 resolver 状态，例如 resolved、NetworkManager、dnsmasq 当前 nameserver/search/cache source | `/etc/resolv.conf`、systemd-resolved runtime、NetworkManager runtime、dnsmasq 配置和 lease/cache 文件 | DNS 被篡改或代理化会影响外联和下载路径；运行时 DNS 常与静态 resolv.conf 不一致 | 增强 `facts/dns_config` |
-| P1 | 原生命令交叉观察 | 仅留原文 | 系统命令输出与 Go-native/procfs 采集结果的交叉观察事实，并记录命令路径、hash、package owner | `ip`、`ss`、`netstat`、`lsof`、`route`、`arp`、`ps` 等可用命令及其二进制路径 | 当系统命令可能被替换时，差异事实可给 parser 提供复核线索；collector 不判定篡改 | `facts/command_observations` |
-| P1 | at/anacron 语义化 | 部分覆盖 | at/anacron 计划任务的执行时间、执行用户、命令体、环境和目标脚本事实 | `/var/spool/at*`、`/etc/anacrontab`、`/var/spool/anacron` | at/anacron 可作为一次性或延迟执行持久化入口，常被忽略 | 增强 `facts/persistence_items` |
-| P1 | rc/init/upstart 命令提取 | 部分覆盖 | 老式 init/rc/upstart 的启动入口、runlevel、脚本命令、脚本 hash/package owner | `/etc/rc.local`、`/etc/init.d/*`、`/etc/rc*.d/*`、`/etc/init/*.conf`、`/etc/inittab` | 兼容非纯 systemd 或老系统，补齐服务自启动和启动脚本入口 | 增强 `facts/persistence_items` |
+| P1 | DHCP 租约 | 已完成 PN2 | DHCP 分配事实，例如 lease IP、router、DNS、DHCP server、lease start/end、interface | `/var/lib/dhcp/*`、`/var/lib/dhclient/*`、NetworkManager lease 目录 | 还原主机所在网络、历史 IP、DNS 和网关，辅助横向移动、资产定位和时间线解释 | `facts/dhcp_leases` |
+| P1 | DNS 运行时解析器 | 已完成 PN2 | 运行时 DNS 配置和 resolver 状态，例如 resolved、NetworkManager、dnsmasq 当前 nameserver/search/source | `/etc/resolv.conf`、systemd-resolved runtime、NetworkManager runtime/static、dnsmasq 配置文件 | DNS 被篡改或代理化会影响外联和下载路径；运行时 DNS 常与静态 resolv.conf 不一致 | 增强 `facts/dns_config` |
+| P1 | IPv6 / neighbor / policy route | 部分覆盖 | IPv6 route、IPv6 neighbor、policy route 原生命令观察已覆盖；IPv4 neighbor state 和 policy route Go-native 结构化仍待增强 | `/proc/net/ipv6_route`、`/proc/net/ndisc_cache`、`ip rule`、`ip neigh` 或 netlink | IPv6、邻居缓存和策略路由会改变外联路径，是外联上下文的重要补充 | `facts/ipv6_routes`、`facts/neighbors`、`facts/command_observations` |
+| P1 | 原生命令交叉观察 | 已完成 PN2 | 系统命令输出与 Go-native/procfs 采集结果的交叉观察事实，并记录命令路径、hash、package owner、exit status、line count、summary | `ip`、`ss`、`netstat`、`lsof`、`route`、`arp` 等可用命令及其二进制路径 | 当系统命令可能被替换时，差异事实可给 parser 提供复核线索；collector 不判定篡改 | `facts/command_observations` |
+| P1 | at/anacron 语义化 | 已完成 PN1 | at/anacron 计划任务的执行时间、执行用户、命令体、环境和目标脚本事实 | `/var/spool/at*`、`/etc/anacrontab`、`/var/spool/anacron` | at/anacron 可作为一次性或延迟执行持久化入口，常被忽略 | 增强 `facts/persistence_items` |
+| P1 | rc/init/upstart 命令提取 | 已完成 PN1 | 老式 init/rc/upstart 的启动入口、runlevel、脚本命令、脚本 hash/package owner | `/etc/rc.local`、`/etc/init.d/*`、`/etc/rc*.d/*`、`/etc/init/*.conf`、`/etc/inittab` | 兼容非纯 systemd 或老系统，补齐服务自启动和启动脚本入口 | 增强 `facts/persistence_items` |
 | P2 | 容器挂载事实 | 部分覆盖 | 容器挂载和 overlay 事实，例如 lower/upper/workdir、host bind mount、image digest、runtime config | Docker/containerd/Podman runtime metadata、`/proc/[pid]/mountinfo`、overlayfs 路径、Kubernetes/CRI metadata | 容器逃逸、挖矿和主机路径挂载调查需要知道容器与宿主文件系统关系 | `facts/container_mounts` |
-| P2 | proc/net 计数器 | 仅留原文 | 网络计数器事实，例如 TCP/UDP/SNMP counters、错误包、重传、连接统计 | `/proc/net/snmp`、`/proc/net/snmp6`、`/proc/net/netstat` | 作为网络异常和流量状态的上下文补充，通常不决定初筛结论 | `facts/network_counters` |
+| P2 | proc/net 计数器 | 已完成 PN2 | 网络计数器事实，例如 TCP/UDP/SNMP counters、错误包、重传、连接统计 | `/proc/net/snmp`、`/proc/net/snmp6`、`/proc/net/netstat` | 作为网络异常和流量状态的上下文补充，通常不决定初筛结论 | `facts/network_counters` |
 | P2 | 云 / 虚拟化线索 | 计划中 | 云和虚拟化资产事实，例如 DMI、cloud-init、instance-id、provider hint、metadata route hint | `/sys/class/dmi/id/*`、`/var/lib/cloud/*`、cloud-init 配置、路由表中的 metadata 地址 | 帮助定位云主机资产、镜像来源和实例身份，辅助报告和后续处置 | `entities/cloud_instance` |
 | P2 | 服务管理器兼容项 | 缺失/部分覆盖 | 非 systemd 服务管理器和应用级 scheduler 的启动项事实 | OpenRC、runit、supervisord、s6、应用自带 scheduler 配置 | 覆盖 Alpine、嵌入式、老发行版或特殊业务主机的自启动入口 | 增强 `facts/persistence_items` |
 
-## 后续开发计划
+## 近期已完成开发计划：持久化与网络增强
+
+本轮目标已完成主线实现：在已完成原版 ATTK 非扫描采集复刻和 AI 原生化的基础上，强化一次性应急采集最常用的两条分析面：持久化入口和网络外联事实。Collector 仍只输出事实，不输出风险、恶意、可疑、归因或处置结论；这些解释留给 parser / AI agent。
+
+### Phase PN1：持久化目标文件与脚本增强
+
+目标：让每个持久化入口尽量直接带上它指向的目标文件、脚本解释器、hash、mtime/ctime、owner、package owner 和 raw copy ref，减少 AI 后续回读 legacy/raw 的需求。
+
+| 子项 | 采集范围 | 输出增强 | DFIR 价值 | 优先级 |
+|---|---|---|---|---|
+| cron 周期脚本 | `/etc/crontab`、`/etc/cron.d/*`、`/etc/cron.hourly/daily/weekly/monthly/*`、`/var/spool/cron*` | 在 `facts/cron_entries` 中补 `interpreter`、`script_path`、`script_exists`、`script_sha256`、`script_mtime/ctime`、`script_uid/gid/mode`、`package_owner` | cron 是 Linux 最常见持久化入口；入口和落地脚本放在同一事实里，AI 可直接关联 | P0 |
+| anacron / at | `/etc/anacrontab`、`/var/spool/anacron/*`、`/var/spool/at*` | 结构化 schedule、job id、user、run time hint、command、environment keys、target file metadata | 补齐延迟执行和低频周期任务，避免只看到 raw 文件 | P1 |
+| PAM module 关联 | `/etc/pam.d/*`、`/lib*/security`、`/usr/lib*/security`、`/usr/lib/*/security` | 在 `facts/pam_persistence` 中补 module symlink target、package owner、include/substack target、module directory source | PAM 可在登录、sudo、ssh 流程中挂执行逻辑，是高价值持久化点 | P0 |
+| rc/init/upstart 命令 | `/etc/rc.local`、`/etc/init.d/*`、`/etc/rc*.d/*`、`/etc/init/*.conf`、`/etc/inittab` | 提取 runlevel、service name、command-like 行、target path、script hash/package owner | 老系统、兼容服务和手工脚本常用这些入口 | P1 |
+| XDG / desktop autostart 补字段 | system/user autostart `.desktop` | 补 `TryExec`、`OnlyShowIn`、`NotShowIn`、`Terminal`、`X-GNOME-Autostart-enabled`、target file metadata | 桌面或图形环境主机上的用户态自启动入口 | P1 |
+| service manager 兼容项 | OpenRC、runit、supervisord、s6、常见 app scheduler 配置 | 输出到 `facts/persistence_items`，保留 manager、service、command、config path、target metadata | 覆盖 Alpine、嵌入式、业务进程管理器 | P2 |
+
+实现要求：
+
+- 不模拟 shell/systemd/PAM 的最终执行语义，只记录 parser 可使用的结构化事实。
+- 目标脚本、解释器和模块文件的 hash 优先复用 `files` / package owner 能力，避免重复扫描。
+- 私钥、token、password、URL credential 继续只在 AI 结构化字段脱敏；legacy/raw 保留证据复核面。
+- 新字段进入现有 `facts/cron_entries`、`facts/pam_persistence`、`facts/persistence_items`、`entities/systemd_unit`，不新增模块级 JSONL 文件。
+
+验收标准：
+
+- fixture 覆盖 cron periodic script、anacrontab、at job、PAM include/substack、自定义 PAM `.so`、rc.d symlink、XDG desktop file。
+- `go test ./internal/collectors/persistence ./internal/collectors/files ./internal/collectors/packages` 和 `go test ./...` 通过。
+- Ubuntu ARM64 VM deep `--scan none` 后抽样确认：持久化入口行内可以直接看到目标文件 metadata/hash/package owner；不出现分析字段。
+- Mac 无法验证的 PAM module 目录、at/anacron 真实 spool 权限和 rc.d 发行版变体，需要在 Linux VM 标记补测。
+
+### Phase PN2：网络运行时与外联上下文增强
+
+目标：把网络外联从“socket 列表”提升为 AI 可直接消费的连接事实：连接端点、方向、owner 进程、exe hash/package、DNS/route/proxy/tunnel/conntrack/firewall 上下文分层输出。
+
+| 子项 | 采集范围 | 输出增强 | DFIR 价值 | 优先级 |
+|---|---|---|---|---|
+| DHCP lease 结构化 | `/var/lib/dhcp/*`、`/var/lib/dhclient/*`、NetworkManager lease 目录 | 新增 `facts/dhcp_leases`，输出 interface、address、router、dns、server、lease start/end/renew/rebind | 还原主机历史 IP、DNS、网关和网络段 | P1 |
+| DNS runtime | `/etc/resolv.conf`、systemd-resolved、NetworkManager、dnsmasq runtime/config/lease/cache 文件 | 增强 `facts/dns_config`，区分 static/runtime/source、nameserver、search、options、stub resolver、manager | DNS 劫持、代理化、外联解析路径需要 runtime 配置 | P1 |
+| IPv6 route / neighbor / policy route | `/proc/net/ipv6_route`、`/proc/net/ndisc_cache`、`ip rule` raw/native cross-check | 增强 `facts/routes`、`facts/arp` 或新增 `facts/neighbors`，补 IPv6 gateway、neighbor、table/rule facts | 当前 IPv4 route/ARP 已有，IPv6 和 policy routing 是外联缺口 | P1 |
+| network flow enrichment v2 | `/proc/net/*` socket、owner PID/FD、`facts/process_lineage`、interface、route、DNS/proxy/tunnel config | 增强 `facts/network_flows`，补 `owner_lineage_keys`、`process_session_ids`、`container_ids`、`cgroup_paths`、`route_interface_hint`、`dns_source_hint` | AI 可把连接和登录、进程、容器、DNS、代理配置关联起来 | P0 |
+| native command cross observation | `ip`、`ss`、`netstat`、`lsof`、`route`、`arp`、`ps` 的路径/hash/package owner 和输出摘要 | 新增 `facts/command_observations`，记录 command path、hash、package owner、exit status、line count、parsed summary | 在命令可能被替换时，提供 Go-native 与 native 视角差异的事实基础 | P1 |
+| proc/net counters | `/proc/net/snmp`、`/proc/net/snmp6`、`/proc/net/netstat` | 新增 `facts/network_counters`，结构化 TCP/UDP/IP counters、retrans、reset、error 计数 | 提供网络状态上下文，通常作为辅助事实 | P2 |
+
+实现要求：
+
+- Go-native `/proc`、sysfs、netlink/文件解析优先；native command 只作为交叉观察，不作为唯一可信来源。
+- 不对连接做 outbound 可疑、恶意 C2、内网横移等结论；只输出 `flow_kind`、endpoint、owner、source facts。
+- proxy/tunnel 继续输出脱敏结构化字段，避免把 PSK、token、URL credential 放进 AI JSONL。
+- 和 `process_lineage`、container、session 的关联只写稳定 key / id，不在 collector 内生成攻击链。
+
+验收标准：
+
+- fixture 覆盖 DHCP lease、systemd-resolved/NetworkManager/dnsmasq、IPv6 route、policy route、native command missing/error、socket owner + process lineage + container/cgroup。
+- `go test ./internal/collectors/network ./internal/netproc ./internal/collectors/process` 和 `go test ./...` 通过。
+- Ubuntu ARM64 VM deep `--scan none` 后抽样确认：`facts/network_flows` 可直接看到 owner process/exe/hash/package/session/container hint；`facts/dns_config` 能区分 static/runtime 来源。
+- RHEL/NetworkManager、IPv6-only、容器宿主机和无 `iproute2` 场景需要后续环境矩阵补测。
+
+### Phase PN3：集成验证与质量门禁
+
+目标：确认 PN1/PN2 没有破坏“只增不减”和 AI JSONL 内容质量。
+
+验收标准：
+
+- 与原版 ATTK 非扫描采集对比继续保持 legacy/raw 只增不减。
+- `ai/evidence.jsonl` 单文件可解析，新增 stream 不拆分模块 JSONL。
+- 字段扫描不出现 `risk`、`severity`、`verdict`、`malicious`、`suspicious`。
+- 抽样检查内容质量，不只看 JSON parse：持久化入口能直接关联目标文件，网络 flow 能直接关联 owner 进程和运行时 DNS/route 上下文。
+- 每个 phase 继续按 Dev / Review / Test 独立门禁执行，主 agent 负责集成和 VM 验收。
+
+## 已完成 / 历史开发计划
 
 ### Phase A1：Journal 事件结构化
 
@@ -90,7 +167,7 @@
 
 当前进展：
 
-- 状态：已完成首轮实现。
+- 状态：已完成首轮实现，并已通过 Ubuntu ARM64 VM deep profile 实采验证。
 - DEV 子 agent：PASS，完成 `internal/collectors/logs` journal event 采集和 fixture 单测。
 - Review 子 agent：先 FAIL 后 PASS；blocking 为 private key block body 脱敏不足，已通过 `internal/redact` 整段 private key block redaction 修复并补测试。
 - Test 子 agent：PASS，覆盖 `go test ./internal/collectors/logs -count=1`、`go test ./...`、字段边界扫描、`git diff --check`、fake `journalctl` CLI smoke、JSONL 校验。
@@ -109,7 +186,7 @@ Collector 工作：
 - `go test ./internal/collectors/logs -count=1` 和 `go test ./...` 通过。
 - 不出现风险/结论字段。
 - 已用 fake `journalctl` 完成 mac CLI smoke：合法 JSONL、`facts/journal_events`、`raw_copy_ref`、raw/legacy journal stdout、parse_error 状态均正常。
-- Ubuntu ARM64 VM 后续 deep `--scan none` 抽样验证真实 systemd journal runtime；当前 mac 无法验证真实 journal 权限和输出变体。
+- Ubuntu ARM64 VM deep `--scan none` 已验证真实 systemd journal runtime：`facts/journal_events` 使用 `journalctl -o json --no-pager -n 20000`，最终实采 17947 条 event，JSONL 无解析错误。
 
 ### Phase A2：Process Lineage
 
@@ -117,7 +194,7 @@ Collector 工作：
 
 当前进展：
 
-- 状态：已完成首轮实现，待 Linux VM 真实 `/proc` 补测。
+- 状态：已完成首轮实现，并已通过 Ubuntu ARM64 VM 真实 `/proc` 实采验证。
 - DEV 子 agent：PASS，完成 `internal/collectors/process` 与 `internal/procfs` 增强。
 - Review 子 agent：先 FAIL 后待最终复核；blocking 为 exe hash/stat 不能基于 readlink 文本路径，已改为 hash/stat `/proc/[pid]/exe` link path，并补 `TestProcessLineageHashesProcExeLinkTarget`。
 - Test 子 agent：mac 限制下 PASS；定向测试、全量测试、字段扫描、diff check 通过，mac CLI smoke 因无 `/proc` 只能验证 absent/error 路径。
@@ -131,7 +208,7 @@ Collector 工作：
 
 - fixture 覆盖父子进程、session/tty、exe hash、cgroup/ns。
 - parser 可以从 JSONL 构建进程执行图，不需要回读 legacy ps/lsof。
-- Ubuntu/Linux VM 后续验证真实 `facts/process_lineage`、`/proc/[pid]/exe` deleted/replaced 行为、cgroup v1/v2、namespace link 权限/race。
+- Ubuntu ARM64 VM 已验证真实 `facts/process_lineage`、cgroup/ns 和 procfs race 表达：最终实采 128 条进程谱系，99 条 kernel thread 的 `environ/exe/exe_metadata` 预期缺失进入 `expected_absent`，`issues` 为 0。`/proc/[pid]/exe` deleted/replaced 行为仍需专门 fixture 或实验进程补测。
 
 ### Phase A3：File Attributes / Timeline
 
@@ -139,11 +216,11 @@ Collector 工作：
 
 当前进展：
 
-- 状态：已完成首轮实现，待 Linux VM 真实 xattr/capability/immutable/statx 补测。
+- 状态：已完成首轮实现，并已通过 Ubuntu ARM64 VM 真实文件属性实采验证。
 - DEV 子 agent：PASS，完成 `facts/file_attributes`，改动集中在 `internal/collectors/files`。
 - Review 子 agent：PASS，确认没有新增全盘扫描、hash 复用现有结果、xattr 默认只输出名称/count、Linux capability raw hex/size/sha256 可作为能力事实保留。
 - Test 子 agent：PASS，覆盖 `go test ./internal/collectors/files -count=1`、`go test ./...`、Linux 编译检查、字段边界扫描、mac CLI smoke；mac smoke 中 `facts/file_attributes=1274`。
-- mac 限制：Linux-only `security.capability`、`FS_IOC_GETFLAGS`、真实 immutable/append-only、statx btime 需要 Linux VM 补测。
+- Ubuntu ARM64 VM 已验证 Linux `statx`、xattr、capability、`FS_IOC_GETFLAGS` 基础路径：最终实采 6862 条 `facts/file_attributes`，382 条 symlink 的 `fs_flags_status=not_applicable`，symlink `partial=0`、symlink fs_flags issue=0。真实 immutable/append-only 场景仍需专门构造文件补测。
 
 Collector 工作：
 

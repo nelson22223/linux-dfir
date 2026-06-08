@@ -12,6 +12,7 @@ import (
 
 	"linux-dfir/internal/archive"
 	"linux-dfir/internal/collectors"
+	"linux-dfir/internal/collectors/logs"
 	"linux-dfir/internal/evidence"
 	"linux-dfir/internal/output"
 	"linux-dfir/internal/profile"
@@ -62,6 +63,7 @@ func Run(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
+	logs.Configure(logs.Options{JournalMaxLines: profileDef.Limits.JournalMaxLines})
 	effectiveTimeout := effectiveTimeout(cfg.Timeout, profileDef.Limits.Timeout)
 	runCtx, cancel := context.WithTimeout(ctx, effectiveTimeout)
 	defer cancel()
@@ -119,6 +121,7 @@ func Run(ctx context.Context, args []string) error {
 			}
 			if err := collector(runCtx, out); err != nil {
 				_ = out.Error(evidence.ErrorEvent{Collector: collectorName, Error: err.Error(), SourcePath: "collector", SourceType: "generated", SourceTrust: "high"})
+				_ = writeCollectorStatus(out, collectorName, "error", err.Error())
 				return err
 			}
 			if err := out.LogEvent(evidence.CollectionEvent{
@@ -129,6 +132,9 @@ func Run(ctx context.Context, args []string) error {
 			}); err != nil {
 				return err
 			}
+			if err := writeCollectorStatus(out, collectorName, "ok", "collector completed"); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := out.LogEvent(evidence.CollectionEvent{
@@ -137,6 +143,9 @@ func Run(ctx context.Context, args []string) error {
 			Status:    "skipped",
 			Message:   "collector not implemented in current phase",
 		}); err != nil {
+			return err
+		}
+		if err := writeCollectorStatus(out, collectorName, "skipped", "collector not implemented in current phase"); err != nil {
 			return err
 		}
 	}
@@ -151,6 +160,7 @@ func Run(ctx context.Context, args []string) error {
 		}
 		if err := scanners.Run(runCtx, out, scanners.Options{Mode: cfg.Scan, CleanMode: cfg.CleanMode, PayloadRoot: "payload", Timeout: effectiveTimeout}); err != nil {
 			_ = out.Error(evidence.ErrorEvent{Collector: "scanner", Error: err.Error(), SourcePath: "scanner", SourceType: "scanner", SourceTrust: "medium"})
+			_ = writeCollectorStatus(out, "scanner", "error", err.Error())
 			return err
 		}
 		if err := out.LogEvent(evidence.CollectionEvent{
@@ -159,6 +169,9 @@ func Run(ctx context.Context, args []string) error {
 			Status:    "ok",
 			Message:   "scanner phase completed",
 		}); err != nil {
+			return err
+		}
+		if err := writeCollectorStatus(out, "scanner", "ok", "scanner phase completed"); err != nil {
 			return err
 		}
 	}
@@ -186,6 +199,11 @@ func Run(ctx context.Context, args []string) error {
 	fmt.Printf("session=%s profile=%s collectors=%s output_mode=%s output=%s scan=%s clean=%s\n",
 		sess.SessionID, profileDef.Name, strings.Join(profileDef.Collectors, ","), cfg.OutputMode, cfg.OutputDir, cfg.Scan, cfg.CleanMode)
 	return nil
+}
+
+func writeCollectorStatus(out *output.Manager, collectorName, status, message string) error {
+	body := fmt.Sprintf("collector: %s\nstatus: %s\nmessage: %s\n", collectorName, status, message)
+	return out.WriteLegacy(filepath.Join("collector_status", collectorName+".out"), []byte(body), collectorName)
 }
 
 func parseArgs(args []string) (Config, error) {

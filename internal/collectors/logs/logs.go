@@ -24,26 +24,38 @@ import (
 )
 
 const (
-	collector       = "logs"
-	logEventsRel    = "facts/log_events.jsonl"
-	authEventsRel   = "facts/auth_events.jsonl"
-	loginEventsRel  = "facts/login_events.jsonl"
-	sessionObsRel   = "facts/session_observations.jsonl"
-	auditRel        = "facts/audit_events.jsonl"
-	journalRel      = "facts/journal_events.jsonl"
-	maxCopyBytes    = 64 * 1024 * 1024
-	maxParseLines   = 20000
-	maxJournalLines = 1000
+	collector              = "logs"
+	logEventsRel           = "facts/log_events.jsonl"
+	authEventsRel          = "facts/auth_events.jsonl"
+	loginEventsRel         = "facts/login_events.jsonl"
+	sessionObsRel          = "facts/session_observations.jsonl"
+	auditRel               = "facts/audit_events.jsonl"
+	journalRel             = "facts/journal_events.jsonl"
+	maxCopyBytes           = 64 * 1024 * 1024
+	maxParseLines          = 20000
+	defaultJournalMaxLines = 5000
 )
 
 var (
 	filesystemRoot   = "/"
 	journalTimeout   = 5 * time.Second
+	journalMaxLines  = defaultJournalMaxLines
 	journalRunner    = common.RunCommand
 	syslogPattern    = regexp.MustCompile(`^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+([^:]+):\s?(.*)$`)
 	isoSyslogPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\S+)\s+(\S+)\s+([^:]+):\s?(.*)$`)
 	auditKVPattern   = regexp.MustCompile(`(\w+)=("[^"]*"|[^\s\x1d]+)`)
 )
+
+type Options struct {
+	JournalMaxLines int
+}
+
+func Configure(options Options) {
+	journalMaxLines = defaultJournalMaxLines
+	if options.JournalMaxLines > 0 {
+		journalMaxLines = options.JournalMaxLines
+	}
+}
 
 type LogEvent struct {
 	evidence.RecordMeta
@@ -372,7 +384,8 @@ func collectJournal(ctx context.Context, out *output.Manager) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	args := []string{"-o", "json", "--no-pager", "-n", strconv.Itoa(maxJournalLines)}
+	limit := effectiveJournalMaxLines()
+	args := []string{"-o", "json", "--no-pager", "-n", strconv.Itoa(limit)}
 	runCtx, cancel := context.WithTimeout(ctx, journalTimeout)
 	defer cancel()
 	result := journalRunner(runCtx, "journalctl", args...)
@@ -395,7 +408,7 @@ func collectJournal(ctx context.Context, out *output.Manager) error {
 	if err != nil {
 		return err
 	}
-	return parseJournalOutput(out, command, rawRef, result.Output)
+	return parseJournalOutput(out, command, rawRef, result.Output, limit)
 }
 
 func writeJournalRawOutput(out *output.Manager, command string, data []byte) (string, error) {
@@ -410,7 +423,7 @@ func writeJournalRawOutput(out *output.Manager, command string, data []byte) (st
 	return filepath.Join("ai", rawRel), nil
 }
 
-func parseJournalOutput(out *output.Manager, command, rawRef string, data []byte) error {
+func parseJournalOutput(out *output.Manager, command, rawRef string, data []byte, limit int) error {
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	lineNumber := 0
@@ -423,8 +436,8 @@ func parseJournalOutput(out *output.Manager, command, rawRef string, data []byte
 		}
 		sawLine = true
 		lineNumber++
-		if lineNumber > maxJournalLines {
-			return writeJournalStatus(out, "line_limit_reached", command, fmt.Sprintf("journal line limit reached: %d", maxJournalLines), nil, lineNumber)
+		if lineNumber > limit {
+			return writeJournalStatus(out, "line_limit_reached", command, fmt.Sprintf("journal line limit reached: %d", limit), nil, lineNumber)
 		}
 		event, err := ParseJournalJSONLine(line)
 		if err != nil {
@@ -454,6 +467,13 @@ func parseJournalOutput(out *output.Manager, command, rawRef string, data []byte
 		return writeJournalStatus(out, "empty", command, "journalctl returned no events", nil, 0)
 	}
 	return nil
+}
+
+func effectiveJournalMaxLines() int {
+	if journalMaxLines <= 0 {
+		return defaultJournalMaxLines
+	}
+	return journalMaxLines
 }
 
 func ParseJournalJSONLine(line string) (JournalEvent, error) {

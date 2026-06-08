@@ -35,20 +35,24 @@ type Connection struct {
 }
 
 type SocketOwner struct {
-	PID            int      `json:"pid"`
-	PPID           int      `json:"ppid,omitempty"`
-	FD             string   `json:"fd"`
-	ProcessName    string   `json:"process_name,omitempty"`
-	UID            int      `json:"uid,omitempty"`
-	Cmdline        []string `json:"cmdline,omitempty"`
-	Exe            string   `json:"exe,omitempty"`
-	Cwd            string   `json:"cwd,omitempty"`
-	Root           string   `json:"root,omitempty"`
-	ExeSHA256      string   `json:"exe_sha256,omitempty"`
-	ExeHashError   string   `json:"exe_hash_error,omitempty"`
-	PackageManager string   `json:"package_manager,omitempty"`
-	PackageName    string   `json:"package_name,omitempty"`
-	PackageVersion string   `json:"package_version,omitempty"`
+	PID              int      `json:"pid"`
+	PPID             int      `json:"ppid,omitempty"`
+	FD               string   `json:"fd"`
+	ProcessName      string   `json:"process_name,omitempty"`
+	UID              int      `json:"uid,omitempty"`
+	Cmdline          []string `json:"cmdline,omitempty"`
+	Exe              string   `json:"exe,omitempty"`
+	Cwd              string   `json:"cwd,omitempty"`
+	Root             string   `json:"root,omitempty"`
+	ExeSHA256        string   `json:"exe_sha256,omitempty"`
+	ExeHashError     string   `json:"exe_hash_error,omitempty"`
+	PackageManager   string   `json:"package_manager,omitempty"`
+	PackageName      string   `json:"package_name,omitempty"`
+	PackageVersion   string   `json:"package_version,omitempty"`
+	LineageKey       string   `json:"lineage_key,omitempty"`
+	ProcessSessionID int      `json:"process_session_id,omitempty"`
+	CgroupPath       string   `json:"cgroup_path,omitempty"`
+	ContainerID      string   `json:"container_id,omitempty"`
 }
 
 type Route struct {
@@ -115,13 +119,70 @@ type HostsEntry struct {
 }
 
 type ResolverConfig struct {
-	Exists       bool             `json:"exists"`
-	AbsentReason string           `json:"absent_reason,omitempty"`
-	Nameservers  []string         `json:"nameservers,omitempty"`
-	Search       []string         `json:"search,omitempty"`
-	Domain       string           `json:"domain,omitempty"`
-	Options      []ResolverOption `json:"options,omitempty"`
-	Directives   []ResolverLine   `json:"directives,omitempty"`
+	Exists        bool             `json:"exists"`
+	AbsentReason  string           `json:"absent_reason,omitempty"`
+	Source        string           `json:"source,omitempty"`
+	Scope         string           `json:"scope,omitempty"`
+	Manager       string           `json:"manager,omitempty"`
+	Runtime       bool             `json:"runtime,omitempty"`
+	Static        bool             `json:"static,omitempty"`
+	StubResolver  bool             `json:"stub_resolver,omitempty"`
+	SymlinkTarget string           `json:"symlink_target,omitempty"`
+	Nameservers   []string         `json:"nameservers,omitempty"`
+	Search        []string         `json:"search,omitempty"`
+	Domain        string           `json:"domain,omitempty"`
+	Options       []ResolverOption `json:"options,omitempty"`
+	Directives    []ResolverLine   `json:"directives,omitempty"`
+}
+
+type DHCPLease struct {
+	Exists       bool     `json:"exists"`
+	AbsentReason string   `json:"absent_reason,omitempty"`
+	SourceFormat string   `json:"source_format,omitempty"`
+	Interface    string   `json:"interface,omitempty"`
+	Address      string   `json:"address,omitempty"`
+	Router       []string `json:"router,omitempty"`
+	DNS          []string `json:"dns,omitempty"`
+	Server       string   `json:"server,omitempty"`
+	LeaseStart   string   `json:"lease_start,omitempty"`
+	LeaseEnd     string   `json:"lease_end,omitempty"`
+	Renew        string   `json:"renew,omitempty"`
+	Rebind       string   `json:"rebind,omitempty"`
+	LineNumber   int      `json:"line_number,omitempty"`
+	SourcePath   string   `json:"source_path,omitempty"`
+}
+
+type IPv6Route struct {
+	Exists               bool   `json:"exists"`
+	AbsentReason         string `json:"absent_reason,omitempty"`
+	Interface            string `json:"interface,omitempty"`
+	Destination          string `json:"destination,omitempty"`
+	DestinationPrefixLen int    `json:"destination_prefix_len"`
+	Source               string `json:"source,omitempty"`
+	SourcePrefixLen      int    `json:"source_prefix_len"`
+	NextHop              string `json:"next_hop,omitempty"`
+	Metric               string `json:"metric,omitempty"`
+	Flags                string `json:"flags,omitempty"`
+}
+
+type NeighborEntry struct {
+	Exists       bool   `json:"exists"`
+	AbsentReason string `json:"absent_reason,omitempty"`
+	Family       string `json:"family,omitempty"`
+	Interface    string `json:"interface,omitempty"`
+	IPAddress    string `json:"ip_address,omitempty"`
+	MAC          string `json:"mac,omitempty"`
+	State        string `json:"state,omitempty"`
+	RawLine      string `json:"raw_line,omitempty"`
+}
+
+type NetworkCounter struct {
+	Exists       bool   `json:"exists"`
+	AbsentReason string `json:"absent_reason,omitempty"`
+	Source       string `json:"source,omitempty"`
+	Protocol     string `json:"protocol,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Value        uint64 `json:"value"`
 }
 
 type ResolverOption struct {
@@ -277,6 +338,76 @@ func ParseRoutes(text string) []Route {
 		})
 	}
 	return routes
+}
+
+func ParseIPv6Routes(text string) []IPv6Route {
+	var routes []IPv6Route
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 10 {
+			continue
+		}
+		routes = append(routes, IPv6Route{
+			Exists:               true,
+			Destination:          parseIPv6Plain(fields[0]),
+			DestinationPrefixLen: parseHexInt(fields[1]),
+			Source:               parseIPv6Plain(fields[2]),
+			SourcePrefixLen:      parseHexInt(fields[3]),
+			NextHop:              parseIPv6Plain(fields[4]),
+			Metric:               fields[5],
+			Flags:                fields[8],
+			Interface:            fields[9],
+		})
+	}
+	return routes
+}
+
+func ParseNeighborCache(text, family string) []NeighborEntry {
+	var entries []NeighborEntry
+	for _, line := range strings.Split(text, "\n") {
+		clean := strings.TrimSpace(line)
+		if clean == "" || strings.HasPrefix(clean, "IPv6") || strings.HasPrefix(clean, "IP ") {
+			continue
+		}
+		fields := strings.Fields(clean)
+		if len(fields) < 3 {
+			continue
+		}
+		entry := NeighborEntry{Exists: true, Family: family, RawLine: clean}
+		if family == "ipv6" {
+			entry.IPAddress = parseMaybeIPv6(fields[0])
+			entry.Interface = fields[len(fields)-1]
+			for _, field := range fields {
+				if strings.Count(field, ":") == 5 {
+					entry.MAC = field
+				}
+			}
+			if len(fields) >= 2 {
+				entry.State = fields[len(fields)-2]
+			}
+		} else if len(fields) >= 6 {
+			entry.IPAddress = fields[0]
+			entry.MAC = fields[3]
+			entry.Interface = fields[5]
+			entry.State = fields[2]
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func ParseDHCPLeases(text, sourcePath string) []DHCPLease {
+	if strings.Contains(text, "lease {") || strings.Contains(text, "lease{") {
+		return parseISCLeases(text, sourcePath)
+	}
+	return parseKeyValueLease(text, sourcePath)
+}
+
+func ParseNetworkCounters(text, source string) []NetworkCounter {
+	if source == "snmp6" {
+		return parseSNMP6Counters(text, source)
+	}
+	return parsePairedProcNetCounters(text, source)
 }
 
 func ParseARP(text string) []ARPEntry {
@@ -475,6 +606,75 @@ func ParseResolvConf(text string) ResolverConfig {
 	return config
 }
 
+func ParseResolvedConf(text string) ResolverConfig {
+	config := ResolverConfig{Exists: true, Manager: "systemd-resolved", Static: true}
+	for i, line := range strings.Split(text, "\n") {
+		clean := stripInlineComment(line)
+		if strings.TrimSpace(clean) == "" || strings.HasPrefix(strings.TrimSpace(clean), "[") || !strings.Contains(clean, "=") {
+			continue
+		}
+		parts := strings.SplitN(clean, "=", 2)
+		key := strings.TrimSpace(parts[0])
+		values := strings.Fields(strings.TrimSpace(parts[1]))
+		config.Directives = append(config.Directives, ResolverLine{LineNumber: i + 1, Directive: strings.ToLower(key), Values: values})
+		switch strings.ToLower(key) {
+		case "dns", "fallbackdns":
+			config.Nameservers = append(config.Nameservers, values...)
+		case "domains":
+			config.Search = append(config.Search, values...)
+		}
+	}
+	config.Nameservers = uniqueStrings(config.Nameservers)
+	config.Search = uniqueStrings(config.Search)
+	return config
+}
+
+func ParseNetworkManagerConfig(text string) ResolverConfig {
+	config := ResolverConfig{Exists: true, Manager: "NetworkManager", Static: true}
+	for i, line := range strings.Split(text, "\n") {
+		clean := stripInlineComment(line)
+		if strings.TrimSpace(clean) == "" || strings.HasPrefix(strings.TrimSpace(clean), "[") || !strings.Contains(clean, "=") {
+			continue
+		}
+		parts := strings.SplitN(clean, "=", 2)
+		key := strings.ToLower(strings.TrimSpace(parts[0]))
+		values := splitAddressList(parts[1])
+		config.Directives = append(config.Directives, ResolverLine{LineNumber: i + 1, Directive: key, Values: values})
+		switch key {
+		case "ipv4.dns", "ipv6.dns", "dns-data", "servers", "nameserver", "nameservers":
+			config.Nameservers = append(config.Nameservers, ipValues(values)...)
+		case "dns-search", "ipv4.dns-search", "ipv6.dns-search", "domains":
+			config.Search = append(config.Search, values...)
+		}
+	}
+	config.Nameservers = uniqueStrings(config.Nameservers)
+	config.Search = uniqueStrings(config.Search)
+	return config
+}
+
+func ParseDNSMasqConfig(text string) ResolverConfig {
+	config := ResolverConfig{Exists: true, Manager: "dnsmasq", Static: true}
+	for i, line := range strings.Split(text, "\n") {
+		clean := stripInlineComment(line)
+		if strings.TrimSpace(clean) == "" {
+			continue
+		}
+		key := clean
+		values := []string{}
+		if strings.Contains(clean, "=") {
+			parts := strings.SplitN(clean, "=", 2)
+			key = strings.TrimSpace(parts[0])
+			values = splitDNSMasqValues(parts[1])
+		}
+		config.Directives = append(config.Directives, ResolverLine{LineNumber: i + 1, Directive: strings.ToLower(key), Values: values})
+		if strings.EqualFold(key, "server") {
+			config.Nameservers = append(config.Nameservers, dnsmasqServerValues(values)...)
+		}
+	}
+	config.Nameservers = uniqueStrings(config.Nameservers)
+	return config
+}
+
 func ParseConntrack(text string) []ConntrackEntry {
 	var entries []ConntrackEntry
 	for _, line := range strings.Split(text, "\n") {
@@ -656,6 +856,15 @@ func ScanSocketOwners(procRoot string) (map[string][]SocketOwner, []Issue) {
 		if rootErr != nil && !isRaceError(rootErr) {
 			issues = append(issues, issue(filepath.Join(base, "root"), "process_root", rootErr))
 		}
+		stat, statErr := procfs.ReadProcessStat(filepath.Join(base, "stat"))
+		if statErr != nil && !isRaceError(statErr) {
+			issues = append(issues, issue(filepath.Join(base, "stat"), "process_stat", statErr))
+		}
+		cgroups, cgroupErr := procfs.ReadCgroupLines(filepath.Join(base, "cgroup"))
+		if cgroupErr != nil && !isRaceError(cgroupErr) {
+			issues = append(issues, issue(filepath.Join(base, "cgroup"), "process_cgroup", cgroupErr))
+		}
+		cgroupPath := primaryCgroupPath(cgroups)
 		for _, entry := range entries {
 			fdPath := filepath.Join(base, "fd", entry.Name())
 			target, err := os.Readlink(fdPath)
@@ -671,15 +880,19 @@ func ScanSocketOwners(procRoot string) (map[string][]SocketOwner, []Issue) {
 				continue
 			}
 			owners[inode] = append(owners[inode], SocketOwner{
-				PID:         pid,
-				PPID:        firstNumber(status["PPid"]),
-				FD:          entry.Name(),
-				ProcessName: status["Name"],
-				UID:         firstNumber(status["Uid"]),
-				Cmdline:     redact.Args(cmdline),
-				Exe:         exe,
-				Cwd:         cwd,
-				Root:        root,
+				PID:              pid,
+				PPID:             firstNumber(status["PPid"]),
+				FD:               entry.Name(),
+				ProcessName:      status["Name"],
+				UID:              firstNumber(status["Uid"]),
+				Cmdline:          redact.Args(cmdline),
+				Exe:              exe,
+				Cwd:              cwd,
+				Root:             root,
+				LineageKey:       ownerLineageKey(pid, stat.StartTimeTicks),
+				ProcessSessionID: stat.SessionID,
+				CgroupPath:       cgroupPath,
+				ContainerID:      ContainerIDFromCgroups(cgroups),
 			})
 		}
 	}
@@ -692,6 +905,23 @@ func ScanSocketOwners(procRoot string) (map[string][]SocketOwner, []Issue) {
 		})
 	}
 	return owners, issues
+}
+
+func ContainerIDFromCgroups(cgroups []procfs.CgroupLine) string {
+	for _, cgroup := range cgroups {
+		for _, part := range strings.FieldsFunc(cgroup.Path, func(r rune) bool {
+			return r == '/' || r == ':' || r == '-' || r == '.'
+		}) {
+			part = strings.TrimSpace(part)
+			if len(part) >= 12 && isLowerHex(part) {
+				if len(part) > 64 {
+					part = part[:64]
+				}
+				return part
+			}
+		}
+	}
+	return ""
 }
 
 func issue(path, kind string, err error) Issue {
@@ -791,6 +1021,26 @@ func parseIPv6Plain(value string) string {
 	return net.IP(bytes).String()
 }
 
+func parseMaybeIPv6(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.Contains(value, ":") {
+		if ip := net.ParseIP(value); ip != nil {
+			return ip.String()
+		}
+		return value
+	}
+	if len(value) == 32 {
+		return parseIPv6Plain(value)
+	}
+	return value
+}
+
+func parseHexInt(value string) int {
+	value = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), "0x")
+	n, _ := strconv.ParseInt(value, 16, 64)
+	return int(n)
+}
+
 func socketState(value, protocol string) string {
 	if strings.HasPrefix(protocol, "udp") {
 		if value == "07" {
@@ -856,6 +1106,259 @@ func firstNumber(value string) int {
 	}
 	n, _ := strconv.Atoi(fields[0])
 	return n
+}
+
+func ownerLineageKey(pid int, startTimeTicks uint64) string {
+	if startTimeTicks > 0 {
+		return fmt.Sprintf("pid:%d:start_ticks:%d", pid, startTimeTicks)
+	}
+	return fmt.Sprintf("pid:%d", pid)
+}
+
+func primaryCgroupPath(cgroups []procfs.CgroupLine) string {
+	for _, cgroup := range cgroups {
+		if cgroup.Path != "" && cgroup.Path != "/" {
+			return cgroup.Path
+		}
+	}
+	if len(cgroups) > 0 {
+		return cgroups[0].Path
+	}
+	return ""
+}
+
+func parseISCLeases(text, sourcePath string) []DHCPLease {
+	var leases []DHCPLease
+	var current *DHCPLease
+	startLine := 0
+	for i, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(stripInlineComment(raw))
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "lease") && strings.Contains(line, "{"):
+			current = &DHCPLease{Exists: true, SourceFormat: "isc_dhclient", SourcePath: sourcePath, LineNumber: i + 1}
+			startLine = i + 1
+		case line == "}" || strings.HasPrefix(line, "}") || strings.HasSuffix(line, "}"):
+			if current != nil {
+				if current.LineNumber == 0 {
+					current.LineNumber = startLine
+				}
+				leases = append(leases, *current)
+				current = nil
+			}
+		default:
+			if current != nil {
+				fillISCLease(current, line)
+			}
+		}
+	}
+	if current != nil {
+		leases = append(leases, *current)
+	}
+	return leases
+}
+
+func fillISCLease(lease *DHCPLease, line string) {
+	line = strings.TrimSuffix(line, ";")
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return
+	}
+	switch fields[0] {
+	case "interface":
+		lease.Interface = strings.Trim(strings.Join(fields[1:], " "), `"`)
+	case "fixed-address":
+		if len(fields) > 1 {
+			lease.Address = strings.Trim(fields[1], `";`)
+		}
+	case "option":
+		if len(fields) < 3 {
+			return
+		}
+		values := commaFields(strings.Join(fields[2:], " "))
+		switch fields[1] {
+		case "routers":
+			lease.Router = uniqueStrings(append(lease.Router, values...))
+		case "domain-name-servers":
+			lease.DNS = uniqueStrings(append(lease.DNS, values...))
+		case "dhcp-server-identifier":
+			if len(values) > 0 {
+				lease.Server = values[0]
+			}
+		}
+	case "renew":
+		lease.Renew = leaseTime(fields[1:])
+	case "rebind":
+		lease.Rebind = leaseTime(fields[1:])
+	case "expire", "ends":
+		lease.LeaseEnd = leaseTime(fields[1:])
+	case "starts":
+		lease.LeaseStart = leaseTime(fields[1:])
+	}
+}
+
+func parseKeyValueLease(text, sourcePath string) []DHCPLease {
+	lease := DHCPLease{Exists: true, SourceFormat: "key_value", SourcePath: sourcePath, LineNumber: 1}
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(stripInlineComment(raw))
+		if line == "" || !strings.Contains(line, "=") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		key := strings.ToLower(strings.TrimSpace(parts[0]))
+		value := strings.Trim(strings.TrimSpace(parts[1]), `"`)
+		switch key {
+		case "interface", "interface_name":
+			lease.Interface = value
+		case "address", "ip_address", "ip4_address_0":
+			lease.Address = strings.Split(value, "/")[0]
+		case "routers", "router", "gateway", "dhcp4_routers":
+			lease.Router = uniqueStrings(append(lease.Router, splitAddressList(value)...))
+		case "dns", "domain_name_servers", "dhcp4_domain_name_servers", "nameservers":
+			lease.DNS = uniqueStrings(append(lease.DNS, splitAddressList(value)...))
+		case "server_address", "dhcp_server_identifier", "server_identifier":
+			lease.Server = value
+		case "lease_start", "starts":
+			lease.LeaseStart = value
+		case "expiry", "lease_end", "ends", "expire":
+			lease.LeaseEnd = value
+		case "renew":
+			lease.Renew = value
+		case "rebind":
+			lease.Rebind = value
+		}
+	}
+	if lease.Interface == "" && lease.Address == "" && len(lease.Router) == 0 && len(lease.DNS) == 0 && lease.Server == "" {
+		return nil
+	}
+	return []DHCPLease{lease}
+}
+
+func leaseTime(fields []string) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	if len(fields) >= 3 && len(fields[0]) == 1 {
+		return strings.Trim(strings.Join(fields[1:], " "), `";`)
+	}
+	return strings.Trim(strings.Join(fields, " "), `";`)
+}
+
+func commaFields(value string) []string {
+	return splitAddressList(strings.Trim(value, `";`))
+}
+
+func splitAddressList(value string) []string {
+	var result []string
+	for _, item := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t'
+	}) {
+		item = strings.Trim(item, `"'`)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func parsePairedProcNetCounters(text, source string) []NetworkCounter {
+	var counters []NetworkCounter
+	var headers map[string][]string
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 || !strings.HasSuffix(fields[0], ":") {
+			continue
+		}
+		protocol := strings.TrimSuffix(fields[0], ":")
+		if headers == nil {
+			headers = map[string][]string{}
+		}
+		if _, ok := headers[protocol]; !ok {
+			headers[protocol] = append([]string{}, fields[1:]...)
+			continue
+		}
+		names := headers[protocol]
+		for i, value := range fields[1:] {
+			if i >= len(names) {
+				break
+			}
+			n, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				continue
+			}
+			counters = append(counters, NetworkCounter{Exists: true, Source: source, Protocol: protocol, Name: names[i], Value: n})
+		}
+		delete(headers, protocol)
+	}
+	return counters
+}
+
+func parseSNMP6Counters(text, source string) []NetworkCounter {
+	var counters []NetworkCounter
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) != 2 {
+			continue
+		}
+		n, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		proto := "Ip6"
+		for i, r := range fields[0] {
+			if i > 0 && r >= 'A' && r <= 'Z' {
+				proto = fields[0][:i]
+				break
+			}
+		}
+		counters = append(counters, NetworkCounter{Exists: true, Source: source, Protocol: proto, Name: fields[0], Value: n})
+	}
+	return counters
+}
+
+func splitDNSMasqValues(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return splitAddressList(value)
+}
+
+func dnsmasqServerValues(values []string) []string {
+	var servers []string
+	for _, value := range values {
+		value = strings.Trim(value, "/")
+		if ip := net.ParseIP(value); ip != nil {
+			servers = append(servers, ip.String())
+		}
+	}
+	return servers
+}
+
+func ipValues(values []string) []string {
+	var result []string
+	for _, value := range values {
+		value = strings.Trim(value, "[]")
+		host, _, err := net.SplitHostPort(value)
+		if err == nil {
+			value = host
+		}
+		if ip := net.ParseIP(value); ip != nil {
+			result = append(result, ip.String())
+		}
+	}
+	return result
+}
+
+func isLowerHex(value string) bool {
+	for _, r := range value {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func parseUint(value string) uint64 {

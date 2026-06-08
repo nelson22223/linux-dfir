@@ -108,6 +108,7 @@ type FileAttributeRecord struct {
 	LinuxCapabilitySize   *int                 `json:"linux_capability_size,omitempty"`
 	LinuxCapabilitySHA256 string               `json:"linux_capability_sha256,omitempty"`
 	FSFlagsHex            string               `json:"fs_flags_hex,omitempty"`
+	FSFlagsStatus         string               `json:"fs_flags_status,omitempty"`
 	Immutable             *bool                `json:"immutable,omitempty"`
 	AppendOnly            *bool                `json:"append_only,omitempty"`
 	PackageOwner          string               `json:"package_owner,omitempty"`

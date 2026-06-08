@@ -35,6 +35,14 @@ func TestParseRoutes(t *testing.T) {
 	}
 }
 
+func TestParseIPv6Routes(t *testing.T) {
+	text := "00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000064 00000000 00000000 00200200 eth0\n"
+	routes := ParseIPv6Routes(text)
+	if len(routes) != 1 || routes[0].Interface != "eth0" || routes[0].Destination != "::" || routes[0].DestinationPrefixLen != 0 || routes[0].NextHop != "fe80::1" {
+		t.Fatalf("unexpected ipv6 routes: %+v", routes)
+	}
+}
+
 func TestParseARP(t *testing.T) {
 	text := "IP address HW type Flags HW address Mask Device\n192.168.1.1 0x1 0x2 aa:bb:cc:dd:ee:ff * eth0\n"
 	entries := ParseARP(text)
@@ -91,6 +99,32 @@ func TestParseHostsAndResolver(t *testing.T) {
 	resolv := ParseResolvConf("nameserver 1.1.1.1\nsearch corp.local example.com\noptions timeout:2 rotate\n")
 	if len(resolv.Nameservers) != 1 || resolv.Nameservers[0] != "1.1.1.1" || len(resolv.Search) != 2 || resolv.Options[0].Key != "timeout" || resolv.Options[0].Value != "2" {
 		t.Fatalf("unexpected resolver: %+v", resolv)
+	}
+}
+
+func TestParseDHCPLeases(t *testing.T) {
+	leases := ParseDHCPLeases("lease {\n interface \"eth0\";\n fixed-address 10.0.0.5;\n option routers 10.0.0.1;\n option domain-name-servers 1.1.1.1, 8.8.8.8;\n option dhcp-server-identifier 10.0.0.1;\n renew 3 2026/06/03 10:00:00;\n rebind 3 2026/06/03 11:00:00;\n expire 3 2026/06/03 12:00:00;\n}\n", "/tmp/dhclient.leases")
+	if len(leases) != 1 || leases[0].Interface != "eth0" || leases[0].Address != "10.0.0.5" || leases[0].Router[0] != "10.0.0.1" || leases[0].DNS[1] != "8.8.8.8" || leases[0].Server != "10.0.0.1" || leases[0].LeaseEnd == "" {
+		t.Fatalf("unexpected leases: %+v", leases)
+	}
+}
+
+func TestParseDNSRuntimeConfigsAndCounters(t *testing.T) {
+	resolved := ParseResolvedConf("[Resolve]\nDNS=9.9.9.9 149.112.112.112\nDomains=corp.local\n")
+	if resolved.Manager != "systemd-resolved" || len(resolved.Nameservers) != 2 || resolved.Search[0] != "corp.local" {
+		t.Fatalf("unexpected resolved config: %+v", resolved)
+	}
+	networkManager := ParseNetworkManagerConfig("[main]\ndns=systemd-resolved\n[global-dns-domain-*]\nservers=10.0.0.53, 10.0.0.54\ndomains=corp.local\n")
+	if networkManager.Manager != "NetworkManager" || len(networkManager.Nameservers) != 2 || networkManager.Nameservers[0] != "10.0.0.53" || networkManager.Search[0] != "corp.local" {
+		t.Fatalf("unexpected NetworkManager config: %+v", networkManager)
+	}
+	dnsmasq := ParseDNSMasqConfig("server=8.8.8.8\nserver=/corp.local/10.0.0.53\n")
+	if dnsmasq.Manager != "dnsmasq" || len(dnsmasq.Nameservers) != 1 || dnsmasq.Nameservers[0] != "8.8.8.8" {
+		t.Fatalf("unexpected dnsmasq config: %+v", dnsmasq)
+	}
+	counters := ParseNetworkCounters("Tcp: ActiveOpens PassiveOpens\nTcp: 1 2\n", "snmp")
+	if len(counters) != 2 || counters[0].Protocol != "Tcp" || counters[0].Name != "ActiveOpens" || counters[0].Value != 1 {
+		t.Fatalf("unexpected counters: %+v", counters)
 	}
 }
 

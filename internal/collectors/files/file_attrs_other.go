@@ -6,6 +6,7 @@ import "os"
 
 func enrichPlatformFileAttributes(_ string, _ os.FileInfo, record *FileAttributeRecord) []FileAttributeIssue {
 	record.BirthTimeStatus = "unsupported"
+	record.FSFlagsStatus = "unsupported"
 	return []FileAttributeIssue{
 		{Field: "ctime", Status: "unsupported", Error: "platform ctime collection is not implemented"},
 		{Field: "birth_time", Status: "unsupported", Error: "platform birth time collection is not implemented"},

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,8 @@ const (
 )
 
 var filesystemRoot = "/"
+var packageOwnerCacheRoot string
+var packageOwnerCache map[string]string
 
 type FileRecord struct {
 	evidence.RecordMeta
@@ -108,6 +111,29 @@ type ItemRecord struct {
 	TargetGID           int                  `json:"target_gid,omitempty"`
 	TargetSize          int64                `json:"target_size,omitempty"`
 	TargetSHA256        string               `json:"target_sha256,omitempty"`
+	TargetMTime         *time.Time           `json:"target_mtime,omitempty"`
+	TargetCTime         *time.Time           `json:"target_ctime,omitempty"`
+	TargetPackageOwner  string               `json:"target_package_owner,omitempty"`
+	Interpreter         string               `json:"interpreter,omitempty"`
+	ScriptPath          string               `json:"script_path,omitempty"`
+	ScriptExists        *bool                `json:"script_exists,omitempty"`
+	ScriptMode          string               `json:"script_mode,omitempty"`
+	ScriptUID           int                  `json:"script_uid,omitempty"`
+	ScriptGID           int                  `json:"script_gid,omitempty"`
+	ScriptSize          int64                `json:"script_size,omitempty"`
+	ScriptSHA256        string               `json:"script_sha256,omitempty"`
+	ScriptMTime         *time.Time           `json:"script_mtime,omitempty"`
+	ScriptCTime         *time.Time           `json:"script_ctime,omitempty"`
+	ScriptPackageOwner  string               `json:"script_package_owner,omitempty"`
+	JobID               string               `json:"job_id,omitempty"`
+	RunTimeHint         string               `json:"run_time_hint,omitempty"`
+	EnvironmentKeys     []string             `json:"environment_keys,omitempty"`
+	WorkingDirectory    string               `json:"working_directory,omitempty"`
+	TryExec             string               `json:"try_exec,omitempty"`
+	OnlyShowIn          []string             `json:"only_show_in,omitempty"`
+	NotShowIn           []string             `json:"not_show_in,omitempty"`
+	Terminal            *bool                `json:"terminal,omitempty"`
+	GNOMEAutostart      *bool                `json:"x_gnome_autostart_enabled,omitempty"`
 	Subject             string               `json:"subject,omitempty"`
 	Hosts               []string             `json:"hosts,omitempty"`
 	RunAs               string               `json:"run_as,omitempty"`
@@ -127,26 +153,33 @@ type DirectiveRecord struct {
 
 type PAMRecord struct {
 	evidence.RecordMeta
-	Exists             bool     `json:"exists"`
-	AbsentReason       string   `json:"absent_reason,omitempty"`
-	SourceFile         string   `json:"source_file,omitempty"`
-	LineNumber         int      `json:"line_number,omitempty"`
-	Service            string   `json:"service,omitempty"`
-	PAMType            string   `json:"pam_type,omitempty"`
-	Control            string   `json:"control,omitempty"`
-	Module             string   `json:"module,omitempty"`
-	ModulePath         string   `json:"module_path,omitempty"`
-	ModulePathResolved string   `json:"module_path_resolved,omitempty"`
-	ModuleFileExists   bool     `json:"module_file_exists"`
-	ModuleFileSHA256   string   `json:"module_file_sha256,omitempty"`
-	ModuleFileSize     int64    `json:"module_file_size,omitempty"`
-	ModuleFileMode     string   `json:"module_file_mode,omitempty"`
-	ModuleFileError    string   `json:"module_file_error,omitempty"`
-	ModuleArgs         []string `json:"module_args,omitempty"`
-	RawLine            string   `json:"raw_line,omitempty"`
-	RedactedLine       string   `json:"redacted_line,omitempty"`
-	SourceFileSHA256   string   `json:"source_file_sha256,omitempty"`
-	Sensitive          bool     `json:"sensitive"`
+	Exists                bool     `json:"exists"`
+	AbsentReason          string   `json:"absent_reason,omitempty"`
+	SourceFile            string   `json:"source_file,omitempty"`
+	LineNumber            int      `json:"line_number,omitempty"`
+	Service               string   `json:"service,omitempty"`
+	PAMType               string   `json:"pam_type,omitempty"`
+	Control               string   `json:"control,omitempty"`
+	Module                string   `json:"module,omitempty"`
+	ModulePath            string   `json:"module_path,omitempty"`
+	ModulePathResolved    string   `json:"module_path_resolved,omitempty"`
+	ModuleSymlinkTarget   string   `json:"module_symlink_target,omitempty"`
+	ModuleDirectorySource string   `json:"module_directory_source,omitempty"`
+	ModulePackageOwner    string   `json:"module_package_owner,omitempty"`
+	ModuleFileExists      bool     `json:"module_file_exists"`
+	ModuleFileSHA256      string   `json:"module_file_sha256,omitempty"`
+	ModuleFileSize        int64    `json:"module_file_size,omitempty"`
+	ModuleFileMode        string   `json:"module_file_mode,omitempty"`
+	ModuleFileError       string   `json:"module_file_error,omitempty"`
+	IncludeTarget         string   `json:"include_target,omitempty"`
+	IncludePathResolved   string   `json:"include_path_resolved,omitempty"`
+	IncludeExists         *bool    `json:"include_exists,omitempty"`
+	IncludeError          string   `json:"include_error,omitempty"`
+	ModuleArgs            []string `json:"module_args,omitempty"`
+	RawLine               string   `json:"raw_line,omitempty"`
+	RedactedLine          string   `json:"redacted_line,omitempty"`
+	SourceFileSHA256      string   `json:"source_file_sha256,omitempty"`
+	Sensitive             bool     `json:"sensitive"`
 }
 
 type userHome struct {
@@ -171,6 +204,9 @@ func Collect(ctx context.Context, out *output.Manager) error {
 	}
 	users := discoverUsers(out)
 	if err := scanCron(out); err != nil {
+		return err
+	}
+	if err := scanAnacron(out); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -242,6 +278,7 @@ func scanCron(out *output.Manager) error {
 			if strings.Contains(dir, "cron.") && dir != "/etc/cron.d" {
 				item := ItemRecord{Exists: true, Category: "cron", ItemType: "cron_periodic_script", Path: sf.SourcePath, Command: sf.SourcePath, TargetPath: sf.SourcePath}
 				enrichTargetFileMetadata(&item, sf.SourcePath)
+				enrichScriptFileMetadata(&item, sf.SourcePath, "")
 				return []ItemRecord{item}
 			}
 			userHint := ""
@@ -261,6 +298,7 @@ func scanCron(out *output.Manager) error {
 		if isPeriodicCronPath(sf.SourcePath) {
 			item := ItemRecord{Exists: true, Category: "cron", ItemType: "cron_periodic_script", Path: sf.SourcePath, Command: sf.SourcePath, TargetPath: sf.SourcePath}
 			enrichTargetFileMetadata(&item, sf.SourcePath)
+			enrichScriptFileMetadata(&item, sf.SourcePath, "")
 			return []ItemRecord{item}
 		}
 		return parseCronText(sf.SourcePath, text, strings.HasPrefix(sf.SourcePath, "/etc/cron.d/"), "")
@@ -286,7 +324,18 @@ func scanRcInit(out *output.Manager) error {
 			} else if strings.HasPrefix(sf.SourcePath, "/etc/init/") {
 				enabled = "upstart_conf"
 			}
-			return []ItemRecord{{Exists: true, Category: "rc_init", ItemType: "init_script", Path: sf.SourcePath, Name: filepath.Base(sf.SourcePath), Command: sf.SourcePath, EnabledHint: enabled}}
+			items := []ItemRecord{{Exists: true, Category: "rc_init", ItemType: "init_script", Path: sf.SourcePath, Name: filepath.Base(sf.SourcePath), Command: sf.SourcePath, EnabledHint: enabled, TargetPath: sf.SourcePath, ScriptPath: sf.SourcePath}}
+			enrichTargetFileMetadata(&items[0], sf.SourcePath)
+			enrichScriptFileMetadata(&items[0], sf.SourcePath, "")
+			commandItems := parseRcText(sf.SourcePath, text)
+			if strings.HasPrefix(sf.SourcePath, "/etc/init/") {
+				for i := range commandItems {
+					commandItems[i].ItemType = "upstart_command"
+					commandItems[i].EnabledHint = enabled
+				}
+			}
+			items = append(items, commandItems...)
+			return items
 		}); err != nil {
 			return err
 		}
@@ -295,6 +344,12 @@ func scanRcInit(out *output.Manager) error {
 	return scanGlobExtras(out, "/etc/rc*", "rc_init", "rc_file", true, skip, func(sf sourceFile, text string) []ItemRecord {
 		return parseRcText(sf.SourcePath, text)
 	})
+}
+
+func scanAnacron(out *output.Manager) error {
+	src := file("/etc/anacrontab", "anacron", "anacrontab", true)
+	src.Optional = true
+	return processTextFile(out, src, parseAnacronText)
 }
 
 func scanSystemd(out *output.Manager) error {
@@ -490,7 +545,7 @@ func scanAt(out *output.Manager) error {
 	}
 	for _, dir := range []string{"/var/spool/at", "/var/spool/atjobs", "/var/spool/cron/atjobs", "/var/at/jobs"} {
 		if err := scanDirectoryOptional(out, dir, "at", "at_job", true, func(sf sourceFile, text string) []ItemRecord {
-			return []ItemRecord{{Exists: true, Category: "at", ItemType: "at_job", Path: sf.SourcePath, Name: filepath.Base(sf.SourcePath), Command: firstInterestingLine(text)}}
+			return []ItemRecord{parseAtJob(sf.SourcePath, text)}
 		}); err != nil {
 			return err
 		}
@@ -845,6 +900,15 @@ func isPeriodicCronPath(path string) bool {
 	return false
 }
 
+func isPeriodicCronDir(path string) bool {
+	switch path {
+	case "/etc/cron.hourly", "/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.monthly":
+		return true
+	default:
+		return false
+	}
+}
+
 func parseCronText(path, text string, systemCron bool, userHint string) []ItemRecord {
 	var records []ItemRecord
 	scanner := bufio.NewScanner(strings.NewReader(text))
@@ -893,29 +957,219 @@ func enrichCronCommandTarget(item *ItemRecord) {
 	item.TargetPath = primary
 	item.TargetPaths = paths
 	enrichTargetFileMetadata(item, primary)
+	scriptPath, interpreter := commandScriptTarget(item.Command, primary)
+	if scriptPath != "" {
+		enrichScriptFileMetadata(item, scriptPath, interpreter)
+	}
 }
 
 func cronCommandTargets(command string) (string, []string) {
-	var paths []string
-	for _, field := range shellFields(command) {
-		field = strings.TrimSpace(field)
+	fields := shellFields(command)
+	var candidates []commandPathCandidate
+	for i, field := range fields {
+		field = cleanCommandPathToken(field)
 		if field == "" || strings.ContainsAny(field, "*?[") {
 			continue
 		}
-		field = strings.Trim(field, `"'`)
 		if !strings.HasPrefix(field, "/") {
 			continue
 		}
-		if strings.ContainsAny(field, "|&;<>(){}") {
+		if field == "/" {
 			continue
 		}
-		paths = append(paths, field)
+		if strings.ContainsAny(field, "|&<>{}") {
+			continue
+		}
+		context := commandContext(fields, i)
+		if skipCommandPathContext(context) {
+			continue
+		}
+		candidates = append(candidates, commandPathCandidate{Path: field, Score: commandPathScore(field, context), Index: i})
+	}
+	if len(candidates) == 0 {
+		return "", nil
+	}
+	var paths []string
+	for _, candidate := range candidates {
+		paths = append(paths, candidate.Path)
 	}
 	paths = uniqueStrings(paths)
 	if len(paths) == 0 {
 		return "", nil
 	}
-	return paths[0], paths
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Score == candidates[j].Score {
+			return candidates[i].Index < candidates[j].Index
+		}
+		return candidates[i].Score > candidates[j].Score
+	})
+	return candidates[0].Path, paths
+}
+
+type commandPathCandidate struct {
+	Path  string
+	Score int
+	Index int
+}
+
+func cleanCommandPathToken(field string) string {
+	field = strings.TrimSpace(strings.Trim(field, `"'`))
+	field = strings.TrimRight(field, ";")
+	return strings.TrimRight(field, ")")
+}
+
+func commandContext(fields []string, pathIndex int) string {
+	start := 0
+	for i := pathIndex - 1; i >= 0; i-- {
+		if shellControlToken(cleanCommandPathToken(fields[i])) {
+			start = i + 1
+			break
+		}
+	}
+	var segment []string
+	for i := start; i < pathIndex; i++ {
+		field := cleanCommandPathToken(fields[i])
+		if field == "" {
+			continue
+		}
+		if strings.Contains(field, "=") && !strings.HasPrefix(field, "/") {
+			continue
+		}
+		segment = append(segment, field)
+	}
+	for _, field := range segment {
+		if filepath.Base(field) == "run-parts" {
+			return "run-parts"
+		}
+	}
+	for _, field := range segment {
+		base := filepath.Base(field)
+		if skipCommandPathContext(base) {
+			return base
+		}
+	}
+	for _, field := range segment {
+		base := filepath.Base(field)
+		if base == "test" || base == "[" {
+			return base
+		}
+	}
+	for i := len(segment) - 1; i >= 0; i-- {
+		field := segment[i]
+		if strings.HasPrefix(field, "-") {
+			continue
+		}
+		return filepath.Base(field)
+	}
+	return ""
+}
+
+func commandPathScore(path, context string) int {
+	switch context {
+	case "run-parts":
+		return 100
+	case "test", "[":
+		return 10
+	}
+	if isInterpreterPath(path) {
+		return 20
+	}
+	if info, err := os.Lstat(actualPath(path)); err == nil {
+		if info.Mode().IsRegular() {
+			return 80
+		}
+		if info.IsDir() {
+			return 60
+		}
+	}
+	return 50
+}
+
+func skipCommandPathContext(context string) bool {
+	switch context {
+	case "cd", "pushd", "mount", "umount", "mkdir", "rmdir", "rm", "cp", "mv", "chmod", "chown", "chgrp", "touch", "install", "ln":
+		return true
+	default:
+		return false
+	}
+}
+
+func shellControlToken(field string) bool {
+	switch field {
+	case "&&", "||", "|", ";", "{", "}":
+		return true
+	default:
+		return false
+	}
+}
+
+func enrichCommandTarget(item *ItemRecord) {
+	primary, paths := cronCommandTargets(item.Command)
+	if primary == "" {
+		return
+	}
+	item.TargetPath = primary
+	item.TargetPaths = paths
+	enrichTargetFileMetadata(item, primary)
+	scriptPath, interpreter := commandScriptTarget(item.Command, primary)
+	if scriptPath != "" {
+		enrichScriptFileMetadata(item, scriptPath, interpreter)
+	}
+}
+
+func commandScriptTarget(command, fallback string) (scriptPath, interpreter string) {
+	fields := shellFields(command)
+	if len(fields) == 0 {
+		return scriptFallback(fallback, ""), ""
+	}
+	for i, field := range fields {
+		field = strings.Trim(field, `"'`)
+		if field == "" || strings.HasPrefix(field, "-") || strings.Contains(field, "=") && !strings.HasPrefix(field, "/") {
+			continue
+		}
+		if !strings.HasPrefix(field, "/") {
+			continue
+		}
+		if isInterpreterPath(field) {
+			interpreter = field
+			for _, next := range fields[i+1:] {
+				next = strings.Trim(next, `"'`)
+				if next == "" || strings.HasPrefix(next, "-") || strings.Contains(next, "=") || strings.ContainsAny(next, "|&;<>(){}") {
+					continue
+				}
+				if strings.HasPrefix(next, "/") {
+					return scriptFallback(next, interpreter), interpreter
+				}
+			}
+			return scriptFallback(fallback, interpreter), interpreter
+		}
+		return scriptFallback(fallback, interpreter), interpreter
+	}
+	return scriptFallback(fallback, interpreter), interpreter
+}
+
+func scriptFallback(path, interpreter string) string {
+	if path == "" || path == "/" {
+		return ""
+	}
+	if isPeriodicCronDir(path) {
+		return ""
+	}
+	info, err := os.Lstat(actualPath(path))
+	if err == nil && info.IsDir() {
+		return ""
+	}
+	return path
+}
+
+func isInterpreterPath(path string) bool {
+	base := filepath.Base(path)
+	switch base {
+	case "sh", "bash", "dash", "zsh", "ksh", "python", "python2", "python3", "perl", "ruby", "php", "node", "env":
+		return true
+	default:
+		return false
+	}
 }
 
 func uniqueStrings(values []string) []string {
@@ -931,8 +1185,115 @@ func uniqueStrings(values []string) []string {
 	return out
 }
 
+func sortedMapKeys(values map[string]bool) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func parseRcText(path, text string) []ItemRecord {
 	return interestingLineItems("rc_init", "rc_command", path, text)
+}
+
+func parseAnacronText(path, text string) []ItemRecord {
+	var records []ItemRecord
+	envKeys := map[string]bool{}
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if name, _, ok := parseShellAssignment(line); ok {
+			envKeys[name] = true
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 4 {
+			continue
+		}
+		rec := ItemRecord{
+			Exists:          true,
+			Category:        "anacron",
+			ItemType:        "anacron_job",
+			Path:            path,
+			LineNumber:      lineNo,
+			Schedule:        "period_days=" + parts[0] + " delay_minutes=" + parts[1],
+			JobID:           parts[2],
+			Name:            parts[2],
+			Command:         strings.Join(parts[3:], " "),
+			EnvironmentKeys: sortedMapKeys(envKeys),
+		}
+		enrichCommandTarget(&rec)
+		records = append(records, rec)
+	}
+	return records
+}
+
+func parseAtJob(path, text string) ItemRecord {
+	record := ItemRecord{
+		Exists:   true,
+		Category: "at",
+		ItemType: "at_job",
+		Path:     path,
+		Name:     filepath.Base(path),
+		JobID:    filepath.Base(path),
+	}
+	envKeys := map[string]bool{}
+	var commands []string
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#!") {
+			record.Interpreter = strings.TrimSpace(strings.TrimPrefix(trimmed, "#!"))
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			lower := strings.ToLower(trimmed)
+			if strings.Contains(lower, " atrun ") || strings.HasPrefix(lower, "# atrun") || strings.Contains(lower, " run at ") {
+				record.RunTimeHint = strings.TrimPrefix(trimmed, "#")
+			}
+			if strings.HasPrefix(lower, "# mail ") {
+				fields := strings.Fields(trimmed)
+				if len(fields) >= 3 {
+					record.User = fields[2]
+				}
+			}
+			continue
+		}
+		if name, _, ok := parseShellAssignment(trimmed); ok {
+			envKeys[name] = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "cd ") {
+			fields := shellFields(trimmed)
+			if len(fields) >= 2 {
+				record.WorkingDirectory = strings.Trim(fields[1], `"'`)
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "umask ") {
+			continue
+		}
+		commands = append(commands, trimmed)
+	}
+	record.EnvironmentKeys = sortedMapKeys(envKeys)
+	record.Commands = redact.Texts(commands)
+	if len(commands) > 0 {
+		record.Command = commands[len(commands)-1]
+		enrichCommandTarget(&record)
+	}
+	return record
 }
 
 func parseProfileText(path, text string) []ItemRecord {
@@ -999,6 +1360,21 @@ func parsePAMText(path, text, sourceSHA256 string) []PAMRecord {
 
 func parsePAMLine(path string, lineNumber int, text, sourceSHA256 string) (PAMRecord, bool) {
 	fields := strings.Fields(text)
+	if len(fields) >= 2 && strings.HasPrefix(fields[0], "@include") {
+		record := PAMRecord{
+			Exists:           true,
+			SourceFile:       path,
+			LineNumber:       lineNumber,
+			Service:          filepath.Base(path),
+			PAMType:          "include",
+			Control:          fields[0],
+			IncludeTarget:    fields[1],
+			RedactedLine:     redact.Text(text),
+			SourceFileSHA256: sourceSHA256,
+		}
+		resolvePAMInclude(&record)
+		return record, true
+	}
 	if len(fields) < 3 {
 		return PAMRecord{}, false
 	}
@@ -1019,6 +1395,21 @@ func parsePAMLine(path string, lineNumber int, text, sourceSHA256 string) (PAMRe
 	control := strings.Join(fields[controlStart:controlEnd+1], " ")
 	moduleIndex := controlEnd + 1
 	module := fields[moduleIndex]
+	if control == "include" || control == "substack" {
+		record := PAMRecord{
+			Exists:           true,
+			SourceFile:       path,
+			LineNumber:       lineNumber,
+			Service:          filepath.Base(path),
+			PAMType:          pamType,
+			Control:          control,
+			IncludeTarget:    module,
+			RedactedLine:     redact.Text(text),
+			SourceFileSHA256: sourceSHA256,
+		}
+		resolvePAMInclude(&record)
+		return record, true
+	}
 	args := redact.Args(fields[moduleIndex+1:])
 	record := PAMRecord{
 		Exists:           true,
@@ -1048,10 +1439,22 @@ func resolvePAMModule(record *PAMRecord) {
 		}
 		record.ModulePathResolved = candidate
 		record.ModuleFileExists = true
-		record.ModuleFileSize = info.Size()
-		record.ModuleFileMode = info.Mode().String()
-		if info.Mode().IsRegular() {
-			if data, err := os.ReadFile(actual); err == nil {
+		record.ModuleDirectorySource = filepath.Dir(candidate)
+		record.ModulePackageOwner = packageOwnerForPath(candidate)
+		contentActual := actual
+		contentInfo := info
+		if info.Mode()&os.ModeSymlink != 0 {
+			if target, err := os.Readlink(actual); err == nil {
+				record.ModuleSymlinkTarget = target
+			}
+			if targetInfo, err := os.Stat(actual); err == nil {
+				contentInfo = targetInfo
+			}
+		}
+		record.ModuleFileSize = contentInfo.Size()
+		record.ModuleFileMode = contentInfo.Mode().String()
+		if contentInfo.Mode().IsRegular() {
+			if data, err := os.ReadFile(contentActual); err == nil {
 				sum := sha256.Sum256(data)
 				record.ModuleFileSHA256 = hex.EncodeToString(sum[:])
 			} else {
@@ -1067,6 +1470,25 @@ func resolvePAMModule(record *PAMRecord) {
 	if len(candidates) > 0 {
 		record.ModuleFileError = "module file not found in pam module directories"
 	}
+}
+
+func resolvePAMInclude(record *PAMRecord) {
+	if record.IncludeTarget == "" {
+		return
+	}
+	path := record.IncludeTarget
+	if !filepath.IsAbs(path) {
+		path = filepath.Join("/etc/pam.d", path)
+	}
+	path = filepath.Clean(path)
+	record.IncludePathResolved = path
+	actual := actualPath(path)
+	if _, err := os.Lstat(actual); err != nil {
+		record.IncludeExists = boolPtr(false)
+		record.IncludeError = err.Error()
+		return
+	}
+	record.IncludeExists = boolPtr(true)
 }
 
 func pamModuleCandidates(module string) []string {
@@ -1139,7 +1561,9 @@ func interestingLineItems(category, itemType, path, text string) []ItemRecord {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		records = append(records, ItemRecord{Exists: true, Category: category, ItemType: itemType, Path: path, LineNumber: lineNo, Command: line})
+		rec := ItemRecord{Exists: true, Category: category, ItemType: itemType, Path: path, LineNumber: lineNo, Command: line}
+		enrichCommandTarget(&rec)
+		records = append(records, rec)
 	}
 	return records
 }
@@ -1592,7 +2016,55 @@ func parseDesktopFile(path, text, user string) []ItemRecord {
 	if fields["exec"] == "" {
 		return nil
 	}
-	return []ItemRecord{{Exists: true, Category: "xdg_autostart", ItemType: "desktop_autostart", Path: path, LineNumber: execLine, User: user, Name: fields["name"], Command: fields["exec"], EnabledHint: hiddenDisabled(fields)}}
+	rec := ItemRecord{
+		Exists:         true,
+		Category:       "xdg_autostart",
+		ItemType:       "desktop_autostart",
+		Path:           path,
+		LineNumber:     execLine,
+		User:           user,
+		Name:           fields["name"],
+		Command:        fields["exec"],
+		EnabledHint:    hiddenDisabled(fields),
+		TryExec:        fields["tryexec"],
+		OnlyShowIn:     splitDesktopList(fields["onlyshowin"]),
+		NotShowIn:      splitDesktopList(fields["notshowin"]),
+		Terminal:       parseDesktopBoolPtr(fields["terminal"]),
+		GNOMEAutostart: parseDesktopBoolPtr(fields["x-gnome-autostart-enabled"]),
+	}
+	enrichCommandTarget(&rec)
+	if rec.ScriptPath == "" && rec.TryExec != "" {
+		tryExecPath := rec.TryExec
+		if !filepath.IsAbs(tryExecPath) {
+			tryExecPath = findExecutableInRootPath(tryExecPath)
+		}
+		if tryExecPath != "" {
+			enrichScriptFileMetadata(&rec, tryExecPath, "")
+		}
+	}
+	return []ItemRecord{rec}
+}
+
+func splitDesktopList(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	var result []string
+	for _, part := range strings.Split(value, ";") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func parseDesktopBoolPtr(value string) *bool {
+	if value == "" {
+		return nil
+	}
+	return boolPtr(strings.EqualFold(value, "true") || value == "1" || strings.EqualFold(value, "yes"))
 }
 
 func discoverUsers(out *output.Manager) []userHome {
@@ -1910,10 +2382,16 @@ func enrichTargetFileMetadata(item *ItemRecord, sourcePath string) {
 	item.TargetExists = boolPtr(true)
 	item.TargetMode = info.Mode().String()
 	item.TargetSize = info.Size()
+	mtime := info.ModTime().UTC()
+	item.TargetMTime = &mtime
+	if ctime, ok := statCTime(info); ok {
+		item.TargetCTime = ctime
+	}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		item.TargetUID = int(st.Uid)
 		item.TargetGID = int(st.Gid)
 	}
+	item.TargetPackageOwner = packageOwnerForPath(sourcePath)
 	if info.Mode().IsRegular() {
 		data, err := os.ReadFile(actual)
 		if err == nil {
@@ -1921,6 +2399,144 @@ func enrichTargetFileMetadata(item *ItemRecord, sourcePath string) {
 			item.TargetSHA256 = hex.EncodeToString(sum[:])
 		}
 	}
+}
+
+func enrichScriptFileMetadata(item *ItemRecord, sourcePath, interpreter string) {
+	if sourcePath == "" || strings.ContainsAny(sourcePath, "*?[") {
+		return
+	}
+	item.ScriptPath = filepath.Clean(sourcePath)
+	item.ScriptExists = boolPtr(false)
+	actual := actualPath(sourcePath)
+	info, err := os.Lstat(actual)
+	if err != nil {
+		if interpreter != "" {
+			item.Interpreter = interpreter
+		}
+		return
+	}
+	item.ScriptExists = boolPtr(true)
+	item.ScriptMode = info.Mode().String()
+	item.ScriptSize = info.Size()
+	mtime := info.ModTime().UTC()
+	item.ScriptMTime = &mtime
+	if ctime, ok := statCTime(info); ok {
+		item.ScriptCTime = ctime
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		item.ScriptUID = int(st.Uid)
+		item.ScriptGID = int(st.Gid)
+	}
+	item.ScriptPackageOwner = packageOwnerForPath(sourcePath)
+	if info.Mode().IsRegular() {
+		data, err := os.ReadFile(actual)
+		if err == nil {
+			sum := sha256.Sum256(data)
+			item.ScriptSHA256 = hex.EncodeToString(sum[:])
+			if interpreter == "" {
+				interpreter = shebangInterpreter(data)
+			}
+		}
+	}
+	if interpreter != "" {
+		item.Interpreter = interpreter
+	}
+}
+
+func shebangInterpreter(data []byte) string {
+	text := string(data)
+	first, _, _ := strings.Cut(text, "\n")
+	first = strings.TrimSpace(first)
+	if !strings.HasPrefix(first, "#!") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(first, "#!"))
+}
+
+func statCTime(info os.FileInfo) (*time.Time, bool) {
+	sys := info.Sys()
+	if sys == nil {
+		return nil, false
+	}
+	value := reflect.ValueOf(sys)
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return nil, false
+	}
+	var ts reflect.Value
+	for _, name := range []string{"Ctim", "Ctimespec", "Ctime"} {
+		ts = value.FieldByName(name)
+		if ts.IsValid() {
+			break
+		}
+	}
+	if !ts.IsValid() || ts.Kind() != reflect.Struct {
+		return nil, false
+	}
+	secField := ts.FieldByName("Sec")
+	nsecField := ts.FieldByName("Nsec")
+	if !secField.IsValid() || !secField.CanInt() || !nsecField.IsValid() || !nsecField.CanInt() {
+		return nil, false
+	}
+	ctime := time.Unix(secField.Int(), nsecField.Int()).UTC()
+	return &ctime, true
+}
+
+func packageOwnerForPath(sourcePath string) string {
+	if sourcePath == "" || !filepath.IsAbs(sourcePath) {
+		return ""
+	}
+	if packageOwnerCache == nil || packageOwnerCacheRoot != filesystemRoot {
+		packageOwnerCacheRoot = filesystemRoot
+		packageOwnerCache = buildDPKGOwnerCache()
+	}
+	return packageOwnerCache[filepath.Clean(sourcePath)]
+}
+
+func buildDPKGOwnerCache() map[string]string {
+	owners := map[string]string{}
+	infoDir := actualPath("/var/lib/dpkg/info")
+	entries, err := os.ReadDir(infoDir)
+	if err != nil {
+		return owners
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".list") {
+			continue
+		}
+		pkg := strings.TrimSuffix(name, ".list")
+		data, err := os.ReadFile(filepath.Join(infoDir, name))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			path := filepath.Clean(strings.TrimSpace(line))
+			if path == "." || path == "" || !filepath.IsAbs(path) {
+				continue
+			}
+			if _, exists := owners[path]; !exists {
+				owners[path] = pkg
+			}
+		}
+	}
+	return owners
+}
+
+func findExecutableInRootPath(name string) string {
+	if name == "" || strings.Contains(name, "/") {
+		return ""
+	}
+	for _, dir := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {
+		candidate := filepath.Join(dir, name)
+		info, err := os.Lstat(actualPath(candidate))
+		if err == nil && info.Mode().IsRegular() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func boolPtr(value bool) *bool {

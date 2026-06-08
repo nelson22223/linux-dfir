@@ -94,19 +94,25 @@ func collectLinuxCapability(actualPath string, record *FileAttributeRecord) []Fi
 
 func collectFSFlags(actualPath string, info os.FileInfo, record *FileAttributeRecord) []FileAttributeIssue {
 	if info.Mode()&os.ModeSymlink != 0 {
-		return []FileAttributeIssue{{Field: "fs_flags", Status: "unsupported", Error: "FS_IOC_GETFLAGS is not collected for symlinks"}}
+		record.FSFlagsStatus = "not_applicable"
+		return nil
 	}
 	fd, err := unix.Open(actualPath, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return []FileAttributeIssue{{Field: "fs_flags", Status: fsFlagIssueStatus(err), Error: err.Error()}}
+		status := fsFlagIssueStatus(err)
+		record.FSFlagsStatus = status
+		return []FileAttributeIssue{{Field: "fs_flags", Status: status, Error: err.Error()}}
 	}
 	defer unix.Close(fd)
 	var flags int
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(unix.FS_IOC_GETFLAGS), uintptr(unsafe.Pointer(&flags)))
 	if errno != 0 {
-		return []FileAttributeIssue{{Field: "fs_flags", Status: fsFlagIssueStatus(errno), Error: errno.Error()}}
+		status := fsFlagIssueStatus(errno)
+		record.FSFlagsStatus = status
+		return []FileAttributeIssue{{Field: "fs_flags", Status: status, Error: errno.Error()}}
 	}
 	record.FSFlagsHex = fmt.Sprintf("0x%x", flags)
+	record.FSFlagsStatus = "ok"
 	record.Immutable = boolPtr(flags&fsImmutableFlag != 0)
 	record.AppendOnly = boolPtr(flags&fsAppendFlag != 0)
 	return nil

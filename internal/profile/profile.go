@@ -16,8 +16,9 @@ type Definition struct {
 }
 
 type Limits struct {
-	MaxFileSize int64  `yaml:"max_file_size"`
-	Timeout     string `yaml:"timeout"`
+	MaxFileSize     int64  `yaml:"max_file_size"`
+	Timeout         string `yaml:"timeout"`
+	JournalMaxLines int    `yaml:"journal_max_lines"`
 }
 
 func Load(profileDir, name string) (Definition, error) {

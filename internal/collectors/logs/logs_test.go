@@ -220,7 +220,7 @@ func TestCollectJournalJSONEvents(t *testing.T) {
 			t.Fatalf("unexpected command %s", command)
 		}
 		gotArgs := strings.Join(args, " ")
-		wantArgs := "-o json --no-pager -n 1000"
+		wantArgs := "-o json --no-pager -n 5000"
 		if gotArgs != wantArgs {
 			t.Fatalf("journalctl args = %q want %q", gotArgs, wantArgs)
 		}
@@ -255,6 +255,27 @@ func TestCollectJournalJSONEvents(t *testing.T) {
 	assertFileContains(t, evidencePath, `"timestamp":"2026-06-03T07:32:27.141735Z"`)
 	assertFileNotContains(t, evidencePath, "super-secret-log")
 	assertJSONL(t, evidencePath)
+}
+
+func TestCollectJournalUsesConfiguredLineLimit(t *testing.T) {
+	restoreLimit := setJournalMaxLinesForTest(42)
+	defer restoreLimit()
+	restoreRunner := setJournalRunnerForTest(func(ctx context.Context, command string, args ...string) common.CommandResult {
+		gotArgs := strings.Join(args, " ")
+		wantArgs := "-o json --no-pager -n 42"
+		if gotArgs != wantArgs {
+			t.Fatalf("journalctl args = %q want %q", gotArgs, wantArgs)
+		}
+		output := `{"__REALTIME_TIMESTAMP":"1780471947141735","MESSAGE":"configured limit","_SYSTEMD_UNIT":"demo.service"}`
+		return common.CommandResult{Command: command, Args: args, Output: []byte(output + "\n"), Path: "/usr/bin/journalctl"}
+	})
+	defer restoreRunner()
+
+	out, outDir := newOutput(t)
+	if err := collectJournal(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `"message":"configured limit"`)
 }
 
 func TestCollectJournalMissingWritesStatus(t *testing.T) {
@@ -356,6 +377,14 @@ func setJournalRunnerForTest(runner func(context.Context, string, ...string) com
 	journalRunner = runner
 	return func() {
 		journalRunner = oldJournalRunner
+	}
+}
+
+func setJournalMaxLinesForTest(limit int) func() {
+	oldJournalMaxLines := journalMaxLines
+	journalMaxLines = limit
+	return func() {
+		journalMaxLines = oldJournalMaxLines
 	}
 }
 

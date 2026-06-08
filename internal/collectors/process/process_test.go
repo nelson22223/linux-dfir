@@ -193,6 +193,32 @@ func TestProcessLineageHashesProcExeLinkTarget(t *testing.T) {
 	}
 }
 
+func TestProcessLineageMarksKernelThreadExpectedAbsent(t *testing.T) {
+	root := t.TempDir()
+	restore := SetProcRootForTest(filepath.Join(root, "proc"))
+	defer restore()
+
+	base := filepath.Join(procRoot, "2")
+	writeFile(t, filepath.Join(base, "status"), "Name:\tkthreadd\nState:\tS (sleeping)\nPPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\n")
+	writeFile(t, filepath.Join(base, "stat"), "2 (kthreadd) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 22\n")
+	writeFile(t, filepath.Join(base, "cmdline"), "")
+	writeFile(t, filepath.Join(base, "cgroup"), "0::/\n")
+	if err := os.MkdirAll(filepath.Join(base, "ns"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("pid:[4026531836]", filepath.Join(base, "ns", "pid")); err != nil {
+		t.Fatal(err)
+	}
+
+	out, outDir := newOutput(t)
+	if err := Collect(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(outDir, "ai/evidence.jsonl")
+	assertEvidenceLineContainsAll(t, evidencePath, []string{`"stream":"facts/process_lineage"`, `"pid":2`}, []string{`"process_kind":"kernel_thread"`, `"expected_absent":[`, `"kind":"exe"`, `"kind":"exe_metadata"`})
+	assertEvidenceLineNotContains(t, evidencePath, []string{`"stream":"facts/process_lineage"`, `"pid":2`}, `"issues":[`)
+}
+
 func TestCollectHandlesPidRace(t *testing.T) {
 	root := t.TempDir()
 	restore := SetProcRootForTest(filepath.Join(root, "proc"))
@@ -358,6 +384,31 @@ func assertEvidenceLineContainsAll(t *testing.T, path string, requiredLineFragme
 			if !strings.Contains(line, fragment) {
 				t.Fatalf("matched evidence line missing %q: %s", fragment, line)
 			}
+		}
+		return
+	}
+	t.Fatalf("no evidence line matched required fragments: %v", requiredLineFragments)
+}
+
+func assertEvidenceLineNotContains(t *testing.T, path string, requiredLineFragments []string, forbiddenFragment string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		matched := true
+		for _, fragment := range requiredLineFragments {
+			if !strings.Contains(line, fragment) {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if strings.Contains(line, forbiddenFragment) {
+			t.Fatalf("matched evidence line unexpectedly contains %q: %s", forbiddenFragment, line)
 		}
 		return
 	}

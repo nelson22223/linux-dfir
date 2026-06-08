@@ -19,15 +19,21 @@ import (
 )
 
 var (
-	procNetRoot             = "/proc/net"
-	procRoot                = "/proc"
-	sysClassNetRoot         = "/sys/class/net"
-	hostsPath               = "/etc/hosts"
-	resolvConfPath          = "/etc/resolv.conf"
-	dpkgStatusPath          = "/var/lib/dpkg/status"
-	dpkgInfoDir             = "/var/lib/dpkg/info"
-	runtimeInterfaces       = net.Interfaces
-	networkPersistencePaths = []string{
+	procNetRoot                = "/proc/net"
+	procRoot                   = "/proc"
+	sysClassNetRoot            = "/sys/class/net"
+	hostsPath                  = "/etc/hosts"
+	resolvConfPath             = "/etc/resolv.conf"
+	systemdResolveRuntimePaths = []string{"/run/systemd/resolve/resolv.conf", "/run/systemd/resolve/stub-resolv.conf"}
+	systemdResolvedConfigPaths = []string{"/etc/systemd/resolved.conf", "/etc/systemd/resolved.conf.d"}
+	networkManagerDNSPaths     = []string{"/run/NetworkManager/resolv.conf", "/run/NetworkManager/no-stub-resolv.conf", "/etc/NetworkManager/NetworkManager.conf", "/etc/NetworkManager/conf.d"}
+	dnsmasqConfigPaths         = []string{"/etc/dnsmasq.conf", "/etc/dnsmasq.d", "/run/dnsmasq", "/var/lib/misc/dnsmasq.leases"}
+	dhcpLeaseDirs              = []string{"/var/lib/dhcp", "/var/lib/dhclient", "/var/lib/NetworkManager"}
+	dpkgStatusPath             = "/var/lib/dpkg/status"
+	dpkgInfoDir                = "/var/lib/dpkg/info"
+	runtimeInterfaces          = net.Interfaces
+	networkCommandRunner       = common.RunCommand
+	networkPersistencePaths    = []string{
 		"/etc/environment",
 		"/etc/wgetrc",
 		"/etc/curlrc",
@@ -59,12 +65,28 @@ type RouteRecord struct {
 	netproc.Route
 }
 
+type IPv6RouteRecord struct {
+	evidence.RecordMeta
+	EntityType string               `json:"entity_type,omitempty"`
+	EntityID   string               `json:"entity_id,omitempty"`
+	Sources    []evidence.SourceRef `json:"sources,omitempty"`
+	netproc.IPv6Route
+}
+
 type ARPRecord struct {
 	evidence.RecordMeta
 	EntityType string               `json:"entity_type,omitempty"`
 	EntityID   string               `json:"entity_id,omitempty"`
 	Sources    []evidence.SourceRef `json:"sources,omitempty"`
 	netproc.ARPEntry
+}
+
+type NeighborRecord struct {
+	evidence.RecordMeta
+	EntityType string               `json:"entity_type,omitempty"`
+	EntityID   string               `json:"entity_id,omitempty"`
+	Sources    []evidence.SourceRef `json:"sources,omitempty"`
+	netproc.NeighborEntry
 }
 
 type InterfaceRecord struct {
@@ -85,6 +107,21 @@ type DNSConfigRecord struct {
 	ResolverConfig *netproc.ResolverConfig `json:"resolver_config,omitempty"`
 }
 
+type DHCPLeaseRecord struct {
+	evidence.RecordMeta
+	EntityType string               `json:"entity_type,omitempty"`
+	EntityID   string               `json:"entity_id,omitempty"`
+	Sources    []evidence.SourceRef `json:"sources,omitempty"`
+	netproc.DHCPLease
+}
+
+type DNSSourceHint struct {
+	Source  string `json:"source,omitempty"`
+	Manager string `json:"manager,omitempty"`
+	Runtime bool   `json:"runtime,omitempty"`
+	Static  bool   `json:"static,omitempty"`
+}
+
 type ConntrackRecord struct {
 	evidence.RecordMeta
 	EntityType string               `json:"entity_type,omitempty"`
@@ -103,13 +140,47 @@ type FirewallRecord struct {
 
 type NetworkFlowRecord struct {
 	evidence.RecordMeta
-	EntityType    string                `json:"entity_type,omitempty"`
-	EntityID      string                `json:"entity_id,omitempty"`
-	Sources       []evidence.SourceRef  `json:"sources,omitempty"`
-	FlowKind      string                `json:"flow_kind,omitempty"`
-	RemoteScope   string                `json:"remote_scope,omitempty"`
-	Socket        netproc.Connection    `json:"socket"`
-	ProcessOwners []netproc.SocketOwner `json:"process_owners,omitempty"`
+	EntityType         string                `json:"entity_type,omitempty"`
+	EntityID           string                `json:"entity_id,omitempty"`
+	Sources            []evidence.SourceRef  `json:"sources,omitempty"`
+	FlowKind           string                `json:"flow_kind,omitempty"`
+	RemoteScope        string                `json:"remote_scope,omitempty"`
+	Socket             netproc.Connection    `json:"socket"`
+	ProcessOwners      []netproc.SocketOwner `json:"process_owners,omitempty"`
+	OwnerLineageKeys   []string              `json:"owner_lineage_keys,omitempty"`
+	ProcessSessionIDs  []int                 `json:"process_session_ids,omitempty"`
+	ContainerIDs       []string              `json:"container_ids,omitempty"`
+	CgroupPaths        []string              `json:"cgroup_paths,omitempty"`
+	RouteInterfaceHint string                `json:"route_interface_hint,omitempty"`
+	DNSSourceHint      []DNSSourceHint       `json:"dns_source_hint,omitempty"`
+}
+
+type CommandObservationRecord struct {
+	evidence.RecordMeta
+	EntityType     string               `json:"entity_type,omitempty"`
+	EntityID       string               `json:"entity_id,omitempty"`
+	Sources        []evidence.SourceRef `json:"sources,omitempty"`
+	Command        string               `json:"command"`
+	Args           []string             `json:"args,omitempty"`
+	CommandLine    string               `json:"command_line"`
+	Path           string               `json:"path,omitempty"`
+	SHA256         string               `json:"sha256,omitempty"`
+	HashError      string               `json:"hash_error,omitempty"`
+	PackageManager string               `json:"package_manager,omitempty"`
+	PackageName    string               `json:"package_name,omitempty"`
+	PackageVersion string               `json:"package_version,omitempty"`
+	Missing        bool                 `json:"missing,omitempty"`
+	ExitStatus     string               `json:"exit_status,omitempty"`
+	LineCount      int                  `json:"line_count,omitempty"`
+	ParsedSummary  map[string]string    `json:"parsed_summary,omitempty"`
+}
+
+type NetworkCounterRecord struct {
+	evidence.RecordMeta
+	EntityType string               `json:"entity_type,omitempty"`
+	EntityID   string               `json:"entity_id,omitempty"`
+	Sources    []evidence.SourceRef `json:"sources,omitempty"`
+	netproc.NetworkCounter
 }
 
 type NetworkPersistenceRecord struct {
@@ -136,7 +207,8 @@ func Collect(ctx context.Context, out *output.Manager) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := writeNativeCommandOutputs(ctx, out); err != nil {
+	packages := loadPackageOwners()
+	if err := writeNativeCommandOutputs(ctx, out, packages); err != nil {
 		return err
 	}
 
@@ -147,7 +219,7 @@ func Collect(ctx context.Context, out *output.Manager) error {
 		}
 		_ = out.Error(evidence.ErrorEvent{Collector: "network", Error: issue.Error, SourcePath: issue.Path, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"})
 	}
-	enrichSocketOwners(owners)
+	enrichSocketOwners(owners, packages)
 
 	connections, connSources, err := collectConnections(out, owners)
 	if err != nil {
@@ -163,8 +235,21 @@ func Collect(ctx context.Context, out *output.Manager) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ipv6Routes, err := collectIPv6Routes(out)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	arpEntries, err := collectARP(out)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := collectNeighbors(out); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -177,13 +262,14 @@ func Collect(ctx context.Context, out *output.Manager) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := collectDNSConfig(out); err != nil {
+	dnsHints, err := collectDNSConfig(out)
+	if err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := collectNetworkFlows(out, connections); err != nil {
+	if err := collectNetworkFlows(out, connections, routes, ipv6Routes, dnsHints); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -213,10 +299,10 @@ func Collect(ctx context.Context, out *output.Manager) error {
 	if err := copyText(out, resolvConfPath, "network/resolv.conf", "legacy/network/resolv.conf"); err != nil {
 		return err
 	}
-	if err := copyDHCPLeases(out); err != nil {
+	if err := collectDHCPLeases(out); err != nil {
 		return err
 	}
-	if err := copyProcNetStats(out); err != nil {
+	if err := collectNetworkCounters(out); err != nil {
 		return err
 	}
 	return nil
@@ -322,6 +408,38 @@ func collectRoutes(out *output.Manager) ([]netproc.Route, error) {
 	return routes, nil
 }
 
+func collectIPv6Routes(out *output.Manager) ([]netproc.IPv6Route, error) {
+	sourcePath := filepath.Join(procNetRoot, "ipv6_route")
+	text, err := os.ReadFile(sourcePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			_ = out.Error(evidence.ErrorEvent{Collector: "network", Error: err.Error(), SourcePath: sourcePath, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"})
+		}
+		record := IPv6RouteRecord{
+			RecordMeta: out.Meta("network", "facts/ipv6_routes.jsonl", sourcePath, "procfs", "high"),
+			EntityType: "route",
+			EntityID:   "ipv6_route:absent:" + sourcePath,
+			Sources:    []evidence.SourceRef{{SourcePath: sourcePath, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"}},
+			IPv6Route:  netproc.IPv6Route{Exists: false, AbsentReason: err.Error()},
+		}
+		return nil, out.AppendAIJSONL("facts/ipv6_routes.jsonl", record, "network", sourcePath, "procfs", "high")
+	}
+	routes := netproc.ParseIPv6Routes(string(text))
+	for _, route := range routes {
+		record := IPv6RouteRecord{
+			RecordMeta: out.Meta("network", "facts/ipv6_routes.jsonl", sourcePath, "procfs", "high"),
+			EntityType: "route",
+			EntityID:   ipv6RouteEntityID(route),
+			Sources:    []evidence.SourceRef{{SourcePath: sourcePath, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"}},
+			IPv6Route:  route,
+		}
+		if err := out.AppendAIJSONL("facts/ipv6_routes.jsonl", record, "network", sourcePath, "procfs", "high"); err != nil {
+			return nil, err
+		}
+	}
+	return routes, nil
+}
+
 func collectARP(out *output.Manager) ([]netproc.ARPEntry, error) {
 	sourcePath := filepath.Join(procNetRoot, "arp")
 	text, err := os.ReadFile(sourcePath)
@@ -350,6 +468,47 @@ func collectARP(out *output.Manager) ([]netproc.ARPEntry, error) {
 		}
 	}
 	return entries, nil
+}
+
+func collectNeighbors(out *output.Manager) error {
+	specs := []struct {
+		path   string
+		family string
+	}{
+		{path: filepath.Join(procNetRoot, "ndisc_cache"), family: "ipv6"},
+	}
+	for _, spec := range specs {
+		data, err := os.ReadFile(spec.path)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				_ = out.Error(evidence.ErrorEvent{Collector: "network", Error: err.Error(), SourcePath: spec.path, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"})
+			}
+			record := NeighborRecord{
+				RecordMeta:    out.Meta("network", "facts/neighbors.jsonl", spec.path, "procfs", "high"),
+				EntityType:    "neighbor_entry",
+				EntityID:      "neighbor:absent:" + spec.path,
+				Sources:       []evidence.SourceRef{{SourcePath: spec.path, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"}},
+				NeighborEntry: netproc.NeighborEntry{Exists: false, Family: spec.family, AbsentReason: err.Error()},
+			}
+			if err := out.AppendAIJSONL("facts/neighbors.jsonl", record, "network", spec.path, "procfs", "high"); err != nil {
+				return err
+			}
+			continue
+		}
+		for _, neighbor := range netproc.ParseNeighborCache(string(data), spec.family) {
+			record := NeighborRecord{
+				RecordMeta:    out.Meta("network", "facts/neighbors.jsonl", spec.path, "procfs", "high"),
+				EntityType:    "neighbor_entry",
+				EntityID:      neighborEntityID(neighbor),
+				Sources:       []evidence.SourceRef{{SourcePath: spec.path, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"}},
+				NeighborEntry: neighbor,
+			}
+			if err := out.AppendAIJSONL("facts/neighbors.jsonl", record, "network", spec.path, "procfs", "high"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func collectInterfaces(out *output.Manager) ([]netproc.Interface, error) {
@@ -393,11 +552,22 @@ func collectInterfaces(out *output.Manager) ([]netproc.Interface, error) {
 	return interfaces, nil
 }
 
-func collectDNSConfig(out *output.Manager) error {
+func collectDNSConfig(out *output.Manager) ([]DNSSourceHint, error) {
+	var hints []DNSSourceHint
 	if err := collectHostsConfig(out); err != nil {
-		return err
+		return hints, err
 	}
-	return collectResolverConfig(out)
+	resolverHints, err := collectResolverConfig(out)
+	if err != nil {
+		return hints, err
+	}
+	hints = append(hints, resolverHints...)
+	runtimeHints, err := collectDNSRuntimeConfig(out)
+	if err != nil {
+		return hints, err
+	}
+	hints = append(hints, runtimeHints...)
+	return uniqueDNSSourceHints(hints), nil
 }
 
 func collectHostsConfig(out *output.Manager) error {
@@ -433,10 +603,10 @@ func collectHostsConfig(out *output.Manager) error {
 	return nil
 }
 
-func collectResolverConfig(out *output.Manager) error {
+func collectResolverConfig(out *output.Manager) ([]DNSSourceHint, error) {
 	data, err := os.ReadFile(resolvConfPath)
 	if err != nil {
-		config := netproc.ResolverConfig{Exists: false, AbsentReason: err.Error()}
+		config := netproc.ResolverConfig{Exists: false, AbsentReason: err.Error(), Source: resolvConfPath, Scope: "static", Static: true, Manager: "libc"}
 		record := DNSConfigRecord{
 			RecordMeta:     out.Meta("network", "facts/dns_config.jsonl", resolvConfPath, "file", "high"),
 			EntityType:     "dns_config",
@@ -448,9 +618,26 @@ func collectResolverConfig(out *output.Manager) error {
 		if !os.IsNotExist(err) {
 			_ = out.Error(evidence.ErrorEvent{Collector: "network", Error: err.Error(), SourcePath: resolvConfPath, SourceType: "file", SourceTrust: "high", RawArtifactRef: "legacy/network/resolv.conf"})
 		}
-		return out.AppendAIJSONL("facts/dns_config.jsonl", record, "network", resolvConfPath, "file", "high")
+		return nil, out.AppendAIJSONL("facts/dns_config.jsonl", record, "network", resolvConfPath, "file", "high")
 	}
 	config := netproc.ParseResolvConf(string(data))
+	config.Source = resolvConfPath
+	config.Scope = "static"
+	config.Static = true
+	config.Manager = "libc"
+	if target, linkErr := os.Readlink(resolvConfPath); linkErr == nil {
+		config.SymlinkTarget = target
+		if strings.Contains(target, "systemd/resolve") {
+			config.Manager = "systemd-resolved"
+			config.Runtime = true
+			config.Scope = "runtime_link"
+		} else if strings.Contains(target, "NetworkManager") {
+			config.Manager = "NetworkManager"
+			config.Runtime = true
+			config.Scope = "runtime_link"
+		}
+	}
+	config.StubResolver = hasStubResolver(config.Nameservers)
 	record := DNSConfigRecord{
 		RecordMeta:     out.Meta("network", "facts/dns_config.jsonl", resolvConfPath, "file", "high"),
 		EntityType:     "dns_config",
@@ -459,28 +646,113 @@ func collectResolverConfig(out *output.Manager) error {
 		Sources:        []evidence.SourceRef{{SourcePath: resolvConfPath, SourceType: "file", SourceTrust: "high", RawArtifactRef: "legacy/network/resolv.conf"}},
 		ResolverConfig: &config,
 	}
-	return out.AppendAIJSONL("facts/dns_config.jsonl", record, "network", resolvConfPath, "file", "high")
+	return []DNSSourceHint{{Source: resolvConfPath, Manager: config.Manager, Runtime: config.Runtime, Static: config.Static}}, out.AppendAIJSONL("facts/dns_config.jsonl", record, "network", resolvConfPath, "file", "high")
 }
 
-func collectNetworkFlows(out *output.Manager, connections []netproc.Connection) error {
+func collectDNSRuntimeConfig(out *output.Manager) ([]DNSSourceHint, error) {
+	var hints []DNSSourceHint
+	collectFile := func(path, manager, scope string, parser func(string) netproc.ResolverConfig) error {
+		if !regularFileForRead(path) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			_ = out.Error(evidence.ErrorEvent{Collector: "network", Error: err.Error(), SourcePath: path, SourceType: "file", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"})
+			return nil
+		}
+		config := parser(string(data))
+		config.Source = path
+		config.Manager = manager
+		config.Scope = scope
+		config.Runtime = strings.HasPrefix(path, "/run/") || strings.Contains(path, "/run/")
+		config.Static = !config.Runtime
+		config.StubResolver = hasStubResolver(config.Nameservers) || strings.Contains(filepath.Base(path), "stub")
+		record := DNSConfigRecord{
+			RecordMeta:     out.Meta("network", "facts/dns_config.jsonl", path, "file", "high"),
+			EntityType:     "dns_config",
+			EntityID:       fmt.Sprintf("dns_config:%s:%s", manager, path),
+			ConfigType:     "dns_runtime",
+			Sources:        []evidence.SourceRef{{SourcePath: path, SourceType: "file", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"}},
+			ResolverConfig: &config,
+		}
+		if err := out.AppendAIJSONL("facts/dns_config.jsonl", record, "network", path, "file", "high"); err != nil {
+			return err
+		}
+		hints = append(hints, DNSSourceHint{Source: path, Manager: manager, Runtime: config.Runtime, Static: config.Static})
+		return nil
+	}
+	for _, path := range systemdResolveRuntimePaths {
+		if err := collectFile(path, "systemd-resolved", "runtime", netproc.ParseResolvConf); err != nil {
+			return hints, err
+		}
+	}
+	for _, path := range expandFiles(systemdResolvedConfigPaths) {
+		if err := collectFile(path, "systemd-resolved", "static", netproc.ParseResolvedConf); err != nil {
+			return hints, err
+		}
+	}
+	for _, path := range expandFiles(networkManagerDNSPaths) {
+		parser := netproc.ParseResolvConf
+		if strings.HasSuffix(path, ".conf") {
+			parser = netproc.ParseNetworkManagerConfig
+		}
+		if err := collectFile(path, "NetworkManager", "runtime_or_static", parser); err != nil {
+			return hints, err
+		}
+	}
+	for _, path := range expandFiles(dnsmasqConfigPaths) {
+		if strings.Contains(filepath.Base(path), "lease") {
+			continue
+		}
+		if err := collectFile(path, "dnsmasq", "runtime_or_static", netproc.ParseDNSMasqConfig); err != nil {
+			return hints, err
+		}
+	}
+	return hints, nil
+}
+
+func collectNetworkFlows(out *output.Manager, connections []netproc.Connection, routes []netproc.Route, ipv6Routes []netproc.IPv6Route, dnsHints []DNSSourceHint) error {
+	wrote := false
 	for _, conn := range connections {
 		if !conn.Exists {
 			continue
 		}
 		sourcePath := procNetRoot
+		ownerLineageKeys, sessionIDs, containerIDs, cgroupPaths := flowOwnerHints(conn.Owners)
 		record := NetworkFlowRecord{
-			RecordMeta:    out.Meta("network", "facts/network_flows.jsonl", sourcePath, "procfs", "high"),
-			EntityType:    "network_flow",
-			EntityID:      "network_flow:" + strings.TrimPrefix(socketEntityID(conn), "socket:"),
-			Sources:       []evidence.SourceRef{{SourcePath: sourcePath, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"}},
-			FlowKind:      flowKind(conn),
-			RemoteScope:   remoteScope(conn.RemoteAddress),
-			Socket:        conn,
-			ProcessOwners: conn.Owners,
+			RecordMeta:         out.Meta("network", "facts/network_flows.jsonl", sourcePath, "procfs", "high"),
+			EntityType:         "network_flow",
+			EntityID:           "network_flow:" + strings.TrimPrefix(socketEntityID(conn), "socket:"),
+			Sources:            []evidence.SourceRef{{SourcePath: sourcePath, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"}},
+			FlowKind:           flowKind(conn),
+			RemoteScope:        remoteScope(conn.RemoteAddress),
+			Socket:             conn,
+			ProcessOwners:      conn.Owners,
+			OwnerLineageKeys:   ownerLineageKeys,
+			ProcessSessionIDs:  sessionIDs,
+			ContainerIDs:       containerIDs,
+			CgroupPaths:        cgroupPaths,
+			RouteInterfaceHint: routeInterfaceHint(conn.RemoteAddress, conn.Family, routes, ipv6Routes),
+			DNSSourceHint:      dnsHints,
 		}
 		if err := out.AppendAIJSONL("facts/network_flows.jsonl", record, "network", sourcePath, "procfs", "high"); err != nil {
 			return err
 		}
+		wrote = true
+	}
+	if !wrote {
+		sourcePath := procNetRoot
+		record := NetworkFlowRecord{
+			RecordMeta: out.Meta("network", "facts/network_flows.jsonl", sourcePath, "procfs", "high"),
+			EntityType: "network_flow",
+			EntityID:   "network_flow:absent",
+			Sources:    []evidence.SourceRef{{SourcePath: sourcePath, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"}},
+			Socket:     netproc.Connection{Exists: false, AbsentReason: "no network flows discovered"},
+		}
+		return out.AppendAIJSONL("facts/network_flows.jsonl", record, "network", sourcePath, "procfs", "high")
 	}
 	return nil
 }
@@ -629,7 +901,7 @@ func writeLegacy(out *output.Manager, connections []netproc.Connection, routes [
 	return out.WriteLegacyFromSource("network/proc_net_interfaces.out", []byte(renderInterfaces(interfaces)), "network", filepath.Join(procNetRoot, "dev"), "procfs", "high")
 }
 
-func writeNativeCommandOutputs(ctx context.Context, out *output.Manager) error {
+func writeNativeCommandOutputs(ctx context.Context, out *output.Manager, packages map[string]packageOwner) error {
 	specs := []struct {
 		command string
 		args    []string
@@ -645,9 +917,16 @@ func writeNativeCommandOutputs(ctx context.Context, out *output.Manager) error {
 		{command: "ip", args: []string{"route"}, legacy: "network/ip_route.out"},
 		{command: "ip", args: []string{"link"}, legacy: "network/ip_link.out"},
 		{command: "ip", args: []string{"rule"}, legacy: "network/ip_rule.out"},
+		{command: "ip", args: []string{"-6", "route"}, legacy: "network/ip_-6_route.out"},
+		{command: "ip", args: []string{"neigh"}, legacy: "network/ip_neigh.out"},
+		{command: "ss", args: []string{"-tunap"}, legacy: "network/ss_-tunap.out"},
+		{command: "lsof", args: []string{"-nP", "-i"}, legacy: "network/lsof_-nP_-i.out"},
 	}
 	for _, spec := range specs {
-		result := common.RunCommand(ctx, spec.command, spec.args...)
+		result := networkCommandRunner(ctx, spec.command, spec.args...)
+		if err := writeCommandObservation(out, result, spec.legacy, packages); err != nil {
+			return err
+		}
 		if result.Missing() {
 			_ = out.Error(evidence.ErrorEvent{Collector: "network", Error: result.Err.Error(), SourcePath: result.CommandLine(), SourceType: "native_command", SourceTrust: "medium", RawArtifactRef: filepath.Join("legacy", spec.legacy)})
 			continue
@@ -665,6 +944,41 @@ func writeNativeCommandOutputs(ctx context.Context, out *output.Manager) error {
 	return nil
 }
 
+func writeCommandObservation(out *output.Manager, result common.CommandResult, legacy string, packages map[string]packageOwner) error {
+	sourcePath := result.CommandLine()
+	record := CommandObservationRecord{
+		RecordMeta:    out.Meta("network", "facts/command_observations.jsonl", sourcePath, "native_command", "medium"),
+		EntityType:    "command_observation",
+		EntityID:      "command_observation:" + sourcePath,
+		Sources:       []evidence.SourceRef{{SourcePath: sourcePath, SourceType: "native_command", SourceTrust: "medium", RawArtifactRef: filepath.Join("legacy", legacy)}},
+		Command:       result.Command,
+		Args:          append([]string{}, result.Args...),
+		CommandLine:   sourcePath,
+		Path:          result.Path,
+		Missing:       result.Missing(),
+		LineCount:     countLines(result.Output),
+		ParsedSummary: commandSummary(result.Command, result.Args, string(result.Output)),
+	}
+	if result.Err != nil {
+		record.ExitStatus = result.Err.Error()
+	} else {
+		record.ExitStatus = "success"
+	}
+	if result.Path != "" {
+		if hash, err := integrity.HashFile(result.Path); err == nil {
+			record.SHA256 = hash.SHA256
+		} else {
+			record.HashError = err.Error()
+		}
+		if owner, ok := packages[result.Path]; ok {
+			record.PackageManager = owner.Manager
+			record.PackageName = owner.Name
+			record.PackageVersion = owner.Version
+		}
+	}
+	return out.AppendAIJSONL("facts/command_observations.jsonl", record, "network", sourcePath, "native_command", "medium")
+}
+
 func copyText(out *output.Manager, sourcePath, legacyRel, rawRef string) error {
 	data, err := os.ReadFile(sourcePath)
 	if err != nil {
@@ -674,8 +988,9 @@ func copyText(out *output.Manager, sourcePath, legacyRel, rawRef string) error {
 	return out.WriteLegacyFromSource(legacyRel, data, "network", sourcePath, "file", "high")
 }
 
-func copyDHCPLeases(out *output.Manager) error {
-	for _, sourceDir := range []string{"/var/lib/dhcp", "/var/lib/dhclient"} {
+func collectDHCPLeases(out *output.Manager) error {
+	wrote := false
+	for _, sourceDir := range dhcpLeaseDirs {
 		entries, err := os.ReadDir(sourceDir)
 		if err != nil {
 			if !os.IsNotExist(err) {
@@ -696,19 +1011,43 @@ func copyDHCPLeases(out *output.Manager) error {
 			if err := out.WriteLegacyFromSource(filepath.Join("network/dhcp", entry.Name()), data, "network", sourcePath, "file", "high"); err != nil {
 				return err
 			}
+			for _, lease := range netproc.ParseDHCPLeases(string(data), sourcePath) {
+				record := DHCPLeaseRecord{
+					RecordMeta: out.Meta("network", "facts/dhcp_leases.jsonl", sourcePath, "file", "high"),
+					EntityType: "dhcp_lease",
+					EntityID:   dhcpLeaseEntityID(lease),
+					Sources:    []evidence.SourceRef{{SourcePath: sourcePath, SourceType: "file", SourceTrust: "high", RawArtifactRef: filepath.Join("legacy/network/dhcp", entry.Name())}},
+					DHCPLease:  lease,
+				}
+				if err := out.AppendAIJSONL("facts/dhcp_leases.jsonl", record, "network", sourcePath, "file", "high"); err != nil {
+					return err
+				}
+				wrote = true
+			}
 		}
+	}
+	if !wrote {
+		record := DHCPLeaseRecord{
+			RecordMeta: out.Meta("network", "facts/dhcp_leases.jsonl", strings.Join(dhcpLeaseDirs, ","), "file", "high"),
+			EntityType: "dhcp_lease",
+			EntityID:   "dhcp_lease:absent",
+			Sources:    []evidence.SourceRef{{SourcePath: strings.Join(dhcpLeaseDirs, ","), SourceType: "file", SourceTrust: "high", RawArtifactRef: "ai/evidence.jsonl"}},
+			DHCPLease:  netproc.DHCPLease{Exists: false, AbsentReason: "no readable dhcp lease records found"},
+		}
+		return out.AppendAIJSONL("facts/dhcp_leases.jsonl", record, "network", strings.Join(dhcpLeaseDirs, ","), "file", "high")
 	}
 	return nil
 }
 
-func copyProcNetStats(out *output.Manager) error {
+func collectNetworkCounters(out *output.Manager) error {
 	specs := []struct {
 		source string
 		legacy string
+		name   string
 	}{
-		{source: filepath.Join(procNetRoot, "snmp"), legacy: "network/proc_net_snmp.out"},
-		{source: filepath.Join(procNetRoot, "netstat"), legacy: "network/proc_net_netstat.out"},
-		{source: filepath.Join(procNetRoot, "snmp6"), legacy: "network/proc_net_snmp6.out"},
+		{source: filepath.Join(procNetRoot, "snmp"), legacy: "network/proc_net_snmp.out", name: "snmp"},
+		{source: filepath.Join(procNetRoot, "netstat"), legacy: "network/proc_net_netstat.out", name: "netstat"},
+		{source: filepath.Join(procNetRoot, "snmp6"), legacy: "network/proc_net_snmp6.out", name: "snmp6"},
 	}
 	for _, spec := range specs {
 		data, err := os.ReadFile(spec.source)
@@ -716,10 +1055,32 @@ func copyProcNetStats(out *output.Manager) error {
 			if !os.IsNotExist(err) {
 				_ = out.Error(evidence.ErrorEvent{Collector: "network", Error: err.Error(), SourcePath: spec.source, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "legacy/" + spec.legacy})
 			}
+			record := NetworkCounterRecord{
+				RecordMeta:     out.Meta("network", "facts/network_counters.jsonl", spec.source, "procfs", "high"),
+				EntityType:     "network_counter",
+				EntityID:       "network_counter:absent:" + spec.name,
+				Sources:        []evidence.SourceRef{{SourcePath: spec.source, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "legacy/" + spec.legacy}},
+				NetworkCounter: netproc.NetworkCounter{Exists: false, Source: spec.name, AbsentReason: err.Error()},
+			}
+			if err := out.AppendAIJSONL("facts/network_counters.jsonl", record, "network", spec.source, "procfs", "high"); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := out.WriteLegacyFromSource(spec.legacy, data, "network", spec.source, "procfs", "high"); err != nil {
 			return err
+		}
+		for _, counter := range netproc.ParseNetworkCounters(string(data), spec.name) {
+			record := NetworkCounterRecord{
+				RecordMeta:     out.Meta("network", "facts/network_counters.jsonl", spec.source, "procfs", "high"),
+				EntityType:     "network_counter",
+				EntityID:       networkCounterEntityID(counter),
+				Sources:        []evidence.SourceRef{{SourcePath: spec.source, SourceType: "procfs", SourceTrust: "high", RawArtifactRef: "legacy/" + spec.legacy}},
+				NetworkCounter: counter,
+			}
+			if err := out.AppendAIJSONL("facts/network_counters.jsonl", record, "network", spec.source, "procfs", "high"); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -754,8 +1115,24 @@ func routeEntityID(route netproc.Route) string {
 	return fmt.Sprintf("route:%s:%s:%s:%s:%d", route.Interface, route.Destination, route.Gateway, route.Mask, route.Metric)
 }
 
+func ipv6RouteEntityID(route netproc.IPv6Route) string {
+	return fmt.Sprintf("ipv6_route:%s:%s/%d:%s", route.Interface, route.Destination, route.DestinationPrefixLen, route.NextHop)
+}
+
 func arpEntityID(entry netproc.ARPEntry) string {
 	return fmt.Sprintf("arp:%s:%s", entry.Device, entry.IP)
+}
+
+func neighborEntityID(entry netproc.NeighborEntry) string {
+	return fmt.Sprintf("neighbor:%s:%s:%s", entry.Family, entry.Interface, entry.IPAddress)
+}
+
+func dhcpLeaseEntityID(lease netproc.DHCPLease) string {
+	return fmt.Sprintf("dhcp_lease:%s:%s:%s:%d", lease.Interface, lease.Address, lease.SourcePath, lease.LineNumber)
+}
+
+func networkCounterEntityID(counter netproc.NetworkCounter) string {
+	return fmt.Sprintf("network_counter:%s:%s:%s", counter.Source, counter.Protocol, counter.Name)
 }
 
 func conntrackEntityID(entry netproc.ConntrackEntry) string {
@@ -777,8 +1154,7 @@ func interfaceSources(devPath, inet6Path string, inet6Err error, sysfsRoot strin
 	return sources
 }
 
-func enrichSocketOwners(owners map[string][]netproc.SocketOwner) {
-	packages := loadPackageOwners()
+func enrichSocketOwners(owners map[string][]netproc.SocketOwner, packages map[string]packageOwner) {
 	for inode, inodeOwners := range owners {
 		for i := range inodeOwners {
 			exe := cleanDeletedSuffix(inodeOwners[i].Exe)
@@ -797,6 +1173,114 @@ func enrichSocketOwners(owners map[string][]netproc.SocketOwner) {
 		}
 		owners[inode] = inodeOwners
 	}
+}
+
+func flowOwnerHints(owners []netproc.SocketOwner) ([]string, []int, []string, []string) {
+	var lineageKeys []string
+	var sessionIDs []int
+	var containerIDs []string
+	var cgroupPaths []string
+	seenString := map[string]bool{}
+	seenInt := map[int]bool{}
+	for _, owner := range owners {
+		if owner.LineageKey != "" && !seenString["lineage:"+owner.LineageKey] {
+			lineageKeys = append(lineageKeys, owner.LineageKey)
+			seenString["lineage:"+owner.LineageKey] = true
+		}
+		if owner.ProcessSessionID != 0 && !seenInt[owner.ProcessSessionID] {
+			sessionIDs = append(sessionIDs, owner.ProcessSessionID)
+			seenInt[owner.ProcessSessionID] = true
+		}
+		if owner.ContainerID != "" && !seenString["container:"+owner.ContainerID] {
+			containerIDs = append(containerIDs, owner.ContainerID)
+			seenString["container:"+owner.ContainerID] = true
+		}
+		if owner.CgroupPath != "" && !seenString["cgroup:"+owner.CgroupPath] {
+			cgroupPaths = append(cgroupPaths, owner.CgroupPath)
+			seenString["cgroup:"+owner.CgroupPath] = true
+		}
+	}
+	sort.Strings(lineageKeys)
+	sort.Ints(sessionIDs)
+	sort.Strings(containerIDs)
+	sort.Strings(cgroupPaths)
+	return lineageKeys, sessionIDs, containerIDs, cgroupPaths
+}
+
+func routeInterfaceHint(address, family string, routes []netproc.Route, ipv6Routes []netproc.IPv6Route) string {
+	ip := net.ParseIP(address)
+	if ip == nil || ip.IsUnspecified() || ip.IsLoopback() {
+		return ""
+	}
+	if family == "ipv6" || strings.Contains(address, ":") {
+		bestIface := ""
+		bestPrefix := -1
+		for _, route := range ipv6Routes {
+			if !route.Exists || route.Interface == "" {
+				continue
+			}
+			if route.Destination == "::" && bestPrefix < route.DestinationPrefixLen {
+				bestIface = route.Interface
+				bestPrefix = route.DestinationPrefixLen
+				continue
+			}
+			if route.DestinationPrefixLen > bestPrefix && ipv6InPrefix(ip, route.Destination, route.DestinationPrefixLen) {
+				bestIface = route.Interface
+				bestPrefix = route.DestinationPrefixLen
+			}
+		}
+		return bestIface
+	}
+	bestIface := ""
+	bestOnes := -1
+	for _, route := range routes {
+		if !route.Exists || route.Interface == "" {
+			continue
+		}
+		_, bits := ipv4MaskSize(route.Mask)
+		if bits > bestOnes && ipv4InRoute(ip, route.Destination, route.Mask) {
+			bestIface = route.Interface
+			bestOnes = bits
+		}
+	}
+	return bestIface
+}
+
+func ipv4MaskSize(mask string) (int, int) {
+	ip := net.ParseIP(mask).To4()
+	if ip == nil {
+		return 0, 0
+	}
+	ones, bits := net.IPMask(ip).Size()
+	if bits == 0 {
+		return 0, 0
+	}
+	return ones, bits
+}
+
+func ipv4InRoute(ip net.IP, destination, mask string) bool {
+	v4 := ip.To4()
+	dest := net.ParseIP(destination).To4()
+	m := net.ParseIP(mask).To4()
+	if v4 == nil || dest == nil || m == nil {
+		return false
+	}
+	for i := 0; i < 4; i++ {
+		if v4[i]&m[i] != dest[i]&m[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func ipv6InPrefix(ip net.IP, destination string, prefixLen int) bool {
+	ip16 := ip.To16()
+	dest := net.ParseIP(destination).To16()
+	if ip16 == nil || dest == nil || prefixLen < 0 || prefixLen > 128 {
+		return false
+	}
+	mask := net.CIDRMask(prefixLen, 128)
+	return ip16.Mask(mask).Equal(dest.Mask(mask))
 }
 
 func loadPackageOwners() map[string]packageOwner {
@@ -901,16 +1385,22 @@ func remoteScope(address string) string {
 func discoverNetworkPersistenceFiles() []string {
 	var files []string
 	for _, path := range networkPersistencePaths {
-		info, err := os.Stat(path)
+		info, err := os.Lstat(path)
 		if err != nil {
 			continue
 		}
 		if !info.IsDir() {
+			if !regularFileForRead(path) {
+				continue
+			}
 			files = append(files, path)
 			continue
 		}
 		_ = filepath.WalkDir(path, func(item string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
+				return nil
+			}
+			if !regularFileForRead(item) {
 				return nil
 			}
 			files = append(files, item)
@@ -1053,6 +1543,139 @@ func sourcePathFromSources(sources []evidence.SourceRef, fallback string) string
 		return fallback
 	}
 	return sources[0].SourcePath
+}
+
+func expandFiles(paths []string) []string {
+	var files []string
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if err != nil {
+			continue
+		}
+		if !info.IsDir() {
+			if !regularFileForRead(path) {
+				continue
+			}
+			files = append(files, path)
+			continue
+		}
+		_ = filepath.WalkDir(path, func(item string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			if !regularFileForRead(item) {
+				return nil
+			}
+			files = append(files, item)
+			return nil
+		})
+	}
+	sort.Strings(files)
+	return files
+}
+
+func regularFileForRead(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Stat(path)
+		return err == nil && target.Mode().IsRegular()
+	}
+	return info.Mode().IsRegular()
+}
+
+func hasStubResolver(nameservers []string) bool {
+	for _, ns := range nameservers {
+		if ns == "127.0.0.53" || ns == "127.0.0.54" || ns == "::1" {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueDNSSourceHints(hints []DNSSourceHint) []DNSSourceHint {
+	seen := map[string]bool{}
+	var result []DNSSourceHint
+	for _, hint := range hints {
+		key := fmt.Sprintf("%s\x00%s\x00%t\x00%t", hint.Source, hint.Manager, hint.Runtime, hint.Static)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, hint)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Manager == result[j].Manager {
+			return result[i].Source < result[j].Source
+		}
+		return result[i].Manager < result[j].Manager
+	})
+	return result
+}
+
+func countLines(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	lines := strings.Count(string(data), "\n")
+	if data[len(data)-1] != '\n' {
+		lines++
+	}
+	return lines
+}
+
+func commandSummary(command string, args []string, output string) map[string]string {
+	lines := nonEmptyLines(output)
+	summary := map[string]string{
+		"non_empty_lines": fmt.Sprint(len(lines)),
+	}
+	key := strings.TrimSpace(command + " " + strings.Join(args, " "))
+	switch {
+	case strings.HasPrefix(key, "ip rule"):
+		summary["policy_rule_count"] = fmt.Sprint(len(lines))
+	case strings.HasPrefix(key, "ip route"):
+		summary["route_count"] = fmt.Sprint(len(lines))
+		summary["default_route_count"] = fmt.Sprint(countLinesWithPrefix(lines, "default "))
+	case strings.HasPrefix(key, "ip -6 route"):
+		summary["ipv6_route_count"] = fmt.Sprint(len(lines))
+	case strings.HasPrefix(key, "ip neigh"):
+		summary["neighbor_count"] = fmt.Sprint(len(lines))
+	case strings.HasPrefix(key, "ss "):
+		summary["socket_line_count"] = fmt.Sprint(maxInt(0, len(lines)-1))
+	case strings.HasPrefix(key, "netstat -s"):
+		summary["counter_line_count"] = fmt.Sprint(len(lines))
+	}
+	return summary
+}
+
+func nonEmptyLines(output string) []string {
+	var lines []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func countLinesWithPrefix(lines []string, prefix string) int {
+	count := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			count++
+		}
+	}
+	return count
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func renderNetstat(connections []netproc.Connection) string {

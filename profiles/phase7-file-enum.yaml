@@ -1,5 +1,5 @@
 name: phase7-file-enum
-description: Phase 7 file enumeration, metadata, suspicious file classes, and bounded hashing.
+description: Phase 7 file enumeration, metadata, notable file classes, and bounded hashing.
 collectors:
   - files
 limits:

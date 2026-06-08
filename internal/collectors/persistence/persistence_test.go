@@ -25,10 +25,13 @@ func TestCollectWithFixturePersistenceFiles(t *testing.T) {
 	cronExtraData := "#!/bin/sh\necho cron-extra\n"
 	userCronData := "#!/bin/sh\necho user-cron\n"
 	cronDailyCleanupData := "#!/bin/sh\n/tmp/cleanup.sh\n"
+	atJobData := "#!/bin/sh\n# atrun uid=1000 gid=1000 run at Wed Jun  3 12:00:00 2026\n# mail alice 0\nSHELL=/bin/sh\ncd /home/alice || exit 1\n/usr/bin/at-job\n"
 	writeFile(t, rootPath(root, "/usr/local/bin/cron-root"), cronRootData)
 	writeFile(t, rootPath(root, "/usr/local/bin/cron-extra"), cronExtraData)
 	writeFile(t, rootPath(root, "/usr/local/bin/user-cron"), userCronData)
+	writeFile(t, rootPath(root, "/usr/bin/at-job"), "#!/bin/sh\necho at\n")
 	writeFile(t, rootPath(root, "/etc/crontab"), "SHELL=/bin/sh\n*/5 * * * * root /usr/local/bin/cron-root\n")
+	writeFile(t, rootPath(root, "/etc/anacrontab"), "SHELL=/bin/sh\nPATH=/usr/sbin:/usr/bin:/sbin:/bin\n1 5 cron.daily nice run-parts /etc/cron.daily\n")
 	writeFile(t, rootPath(root, "/etc/cron.allow"), "root\nalice\n")
 	writeFile(t, rootPath(root, "/etc/cron.extra"), "*/10 * * * * root /usr/local/bin/cron-extra\n*/20 * * * * root /missing/cron-target\n")
 	writeFile(t, rootPath(root, "/etc/cron.d/app"), "@reboot app /opt/app/start.sh\n")
@@ -68,11 +71,12 @@ func TestCollectWithFixturePersistenceFiles(t *testing.T) {
 	writeFile(t, rootPath(root, "/opt/lib/security/pam_custom.so"), pamCustomData)
 	writeFile(t, rootPath(root, "/etc/pam.d/sshd"), "auth required pam_exec.so expose_authtok /usr/local/bin/pam-hook --token pam-token-value\nsession optional /opt/lib/security/pam_custom.so arg=value\n@include common-auth\n")
 	writeFile(t, rootPath(root, "/etc/at.allow"), "alice\n")
-	writeFile(t, rootPath(root, "/var/spool/at/a0000101"), "#!/bin/sh\n/usr/bin/at-job\n")
+	writeFile(t, rootPath(root, "/var/spool/at/a0000101"), atJobData)
 	writeFile(t, rootPath(root, "/var/at/jobs/b0000202"), "#!/bin/sh\n/usr/bin/var-at-job\n")
 	writeFile(t, rootPath(root, "/var/cron/tabs/alice"), "*/15 * * * * /usr/local/bin/user-cron\n")
 	writeFile(t, rootPath(root, "/var/log/cron"), "Jun  3 00:00:00 host CRON[1]: test\n")
-	writeFile(t, rootPath(root, "/etc/xdg/autostart/demo.desktop"), "[Desktop Entry]\nName=Demo\nExec=/opt/demo/autostart\n")
+	writeFile(t, rootPath(root, "/var/lib/dpkg/info/local-tools.list"), "/usr/local/bin/cron-root\n/etc/cron.daily/cleanup\n/usr/lib/x86_64-linux-gnu/security/pam_exec.so\n")
+	writeFile(t, rootPath(root, "/etc/xdg/autostart/demo.desktop"), "[Desktop Entry]\nName=Demo\nExec=/opt/demo/autostart --flag\nTryExec=/opt/demo/autostart\nOnlyShowIn=GNOME;KDE;\nNotShowIn=XFCE;\nTerminal=true\nX-GNOME-Autostart-enabled=false\n")
 	writeFile(t, rootPath(root, "/home/alice/.config/autostart/user.desktop"), "[Desktop Entry]\nName=UserDemo\nExec=/opt/user/autostart\n")
 
 	out, outDir := newOutput(t)
@@ -87,15 +91,20 @@ func TestCollectWithFixturePersistenceFiles(t *testing.T) {
 	assertFileContains(t, items, `/usr/local/bin/cron-extra`)
 	assertFileContains(t, items, `/usr/local/bin/user-cron`)
 	assertEvidenceRecord(t, items, "facts/cron_entries", map[string]any{
-		"category":      "cron",
-		"item_type":     "cron_entry",
-		"path":          "/etc/crontab",
-		"user":          "root",
-		"target_path":   "/usr/local/bin/cron-root",
-		"target_exists": true,
-		"target_sha256": sha256Hex(cronRootData),
-		"target_size":   len(cronRootData),
-		"target_mode":   "-rw-r-----",
+		"category":             "cron",
+		"item_type":            "cron_entry",
+		"path":                 "/etc/crontab",
+		"user":                 "root",
+		"target_path":          "/usr/local/bin/cron-root",
+		"target_exists":        true,
+		"target_sha256":        sha256Hex(cronRootData),
+		"target_size":          len(cronRootData),
+		"target_mode":          "-rw-r-----",
+		"script_path":          "/usr/local/bin/cron-root",
+		"script_exists":        true,
+		"script_sha256":        sha256Hex(cronRootData),
+		"interpreter":          "/bin/sh",
+		"script_package_owner": "local-tools",
 	})
 	assertEvidenceRecord(t, items, "facts/cron_entries", map[string]any{
 		"category":      "cron",
@@ -124,16 +133,26 @@ func TestCollectWithFixturePersistenceFiles(t *testing.T) {
 		"target_size":   len(userCronData),
 	})
 	assertEvidenceRecord(t, items, "facts/cron_entries", map[string]any{
-		"category":      "cron",
-		"item_type":     "cron_periodic_script",
-		"path":          "/etc/cron.daily/cleanup",
-		"command":       "/etc/cron.daily/cleanup",
-		"target_path":   "/etc/cron.daily/cleanup",
-		"target_exists": true,
-		"target_sha256": sha256Hex(cronDailyCleanupData),
-		"target_size":   len(cronDailyCleanupData),
-		"target_mode":   "-rw-r-----",
+		"category":             "cron",
+		"item_type":            "cron_periodic_script",
+		"path":                 "/etc/cron.daily/cleanup",
+		"command":              "/etc/cron.daily/cleanup",
+		"target_path":          "/etc/cron.daily/cleanup",
+		"target_exists":        true,
+		"target_sha256":        sha256Hex(cronDailyCleanupData),
+		"target_size":          len(cronDailyCleanupData),
+		"target_mode":          "-rw-r-----",
+		"script_path":          "/etc/cron.daily/cleanup",
+		"script_exists":        true,
+		"interpreter":          "/bin/sh",
+		"script_package_owner": "local-tools",
 	})
+	assertCronCommandTarget(t, "cd / && run-parts --report /etc/cron.hourly", "/etc/cron.hourly", []string{"/etc/cron.hourly"})
+	assertCronCommandTarget(t, "test -x /usr/sbin/anacron || { cd / && run-parts --report /etc/cron.daily; }", "/etc/cron.daily", []string{"/usr/sbin/anacron", "/etc/cron.daily"})
+	assertCronCommandTarget(t, "mount -uw /", "", nil)
+	assertCronCommandTarget(t, "/bin/sh /opt/demo/run.sh", "/opt/demo/run.sh", []string{"/bin/sh", "/opt/demo/run.sh"})
+	assertCommandScriptTarget(t, "cd / && run-parts --report /etc/cron.hourly", "/etc/cron.hourly", "", "")
+	assertCommandScriptTarget(t, "/bin/sh /opt/demo/run.sh", "/opt/demo/run.sh", "/opt/demo/run.sh", "/bin/sh")
 	assertFileContains(t, items, `"category":"systemd"`)
 	assertFileContains(t, items, `"ExecStartPre":["/opt/demo/pre"]`)
 	assertFileContains(t, items, `"ExecStartPost":["/opt/demo/post"]`)
@@ -152,6 +171,9 @@ func TestCollectWithFixturePersistenceFiles(t *testing.T) {
 	assertFileContains(t, items, `/opt/user-global/run`)
 	assertFileContains(t, items, `/opt/user-local/run`)
 	assertFileContains(t, items, `upstart-demo.conf`)
+	assertFileContains(t, items, `"item_type":"upstart_command"`)
+	assertFileContains(t, items, `"target_path":"/opt/upstart-demo"`)
+	assertFileContains(t, items, `"target_path":"/usr/bin/init-demo"`)
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `WantedBy=multi-user.target`)
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `WantedBy=default.target`)
 	assertFileContains(t, filepath.Join(outDir, "ai/evidence.jsonl"), `/etc/systemd/system/multi-user.target.wants/demo.service`)
@@ -193,19 +215,21 @@ func TestCollectWithFixturePersistenceFiles(t *testing.T) {
 	assertFileContains(t, items, `"sudo_commands":["/bin/bash"]`)
 	assertStreamAtLeast(t, items, "facts/pam_persistence", 2)
 	assertEvidenceRecord(t, items, "facts/pam_persistence", map[string]any{
-		"exists":               true,
-		"source_file":          "/etc/pam.d/sshd",
-		"line_number":          1,
-		"service":              "sshd",
-		"pam_type":             "auth",
-		"control":              "required",
-		"module":               "pam_exec.so",
-		"module_path":          "pam_exec.so",
-		"module_path_resolved": "/usr/lib/x86_64-linux-gnu/security/pam_exec.so",
-		"module_file_exists":   true,
-		"module_file_sha256":   sha256Hex(pamExecData),
-		"module_file_size":     len(pamExecData),
-		"module_file_mode":     "-rw-r-----",
+		"exists":                  true,
+		"source_file":             "/etc/pam.d/sshd",
+		"line_number":             1,
+		"service":                 "sshd",
+		"pam_type":                "auth",
+		"control":                 "required",
+		"module":                  "pam_exec.so",
+		"module_path":             "pam_exec.so",
+		"module_path_resolved":    "/usr/lib/x86_64-linux-gnu/security/pam_exec.so",
+		"module_file_exists":      true,
+		"module_file_sha256":      sha256Hex(pamExecData),
+		"module_file_size":        len(pamExecData),
+		"module_file_mode":        "-rw-r-----",
+		"module_directory_source": "/usr/lib/x86_64-linux-gnu/security",
+		"module_package_owner":    "local-tools",
 	})
 	assertEvidenceRecord(t, items, "facts/pam_persistence", map[string]any{
 		"exists":               true,
@@ -222,9 +246,49 @@ func TestCollectWithFixturePersistenceFiles(t *testing.T) {
 	})
 	assertFileContains(t, items, `"module_args":["expose_authtok","/usr/local/bin/pam-hook","--token","[redacted]"]`)
 	assertFileContains(t, items, `"redacted_line":"auth required pam_exec.so expose_authtok /usr/local/bin/pam-hook --token [redacted]"`)
+	assertEvidenceRecord(t, items, "facts/pam_persistence", map[string]any{
+		"source_file":           "/etc/pam.d/sshd",
+		"line_number":           3,
+		"control":               "@include",
+		"include_target":        "common-auth",
+		"include_path_resolved": "/etc/pam.d/common-auth",
+		"include_exists":        false,
+	})
+	assertFileContains(t, items, `"category":"anacron"`)
+	assertEvidenceRecord(t, items, "facts/persistence_items", map[string]any{
+		"category":  "anacron",
+		"item_type": "anacron_job",
+		"path":      "/etc/anacrontab",
+		"schedule":  "period_days=1 delay_minutes=5",
+		"job_id":    "cron.daily",
+		"command":   "nice run-parts /etc/cron.daily",
+	})
 	assertFileContains(t, items, `"category":"at"`)
 	assertFileContains(t, items, `/usr/bin/var-at-job`)
+	assertEvidenceRecord(t, items, "facts/persistence_items", map[string]any{
+		"category":          "at",
+		"item_type":         "at_job",
+		"path":              "/var/spool/at/a0000101",
+		"job_id":            "a0000101",
+		"user":              "alice",
+		"command":           "/usr/bin/at-job",
+		"working_directory": "/home/alice",
+		"target_path":       "/usr/bin/at-job",
+		"script_path":       "/usr/bin/at-job",
+	})
 	assertFileContains(t, items, `"category":"xdg_autostart"`)
+	assertEvidenceRecord(t, items, "facts/persistence_items", map[string]any{
+		"category":                  "xdg_autostart",
+		"item_type":                 "desktop_autostart",
+		"path":                      "/etc/xdg/autostart/demo.desktop",
+		"command":                   "/opt/demo/autostart --flag",
+		"try_exec":                  "/opt/demo/autostart",
+		"x_gnome_autostart_enabled": false,
+		"terminal":                  true,
+		"enabled_hint":              "disabled",
+	})
+	assertFileContains(t, items, `"only_show_in":["GNOME","KDE"]`)
+	assertFileContains(t, items, `"not_show_in":["XFCE"]`)
 	assertStreamCount(t, items, "parsed/persistence_files", 0)
 	assertStreamCount(t, items, "parsed/persistence_items", 0)
 	assertStreamCount(t, items, "parsed/cron_entries", 0)
@@ -351,9 +415,15 @@ func rootPath(root, sourcePath string) string {
 
 func SetRootForTest(root string) func() {
 	old := filesystemRoot
+	oldCacheRoot := packageOwnerCacheRoot
+	oldCache := packageOwnerCache
 	filesystemRoot = root
+	packageOwnerCacheRoot = ""
+	packageOwnerCache = nil
 	return func() {
 		filesystemRoot = old
+		packageOwnerCacheRoot = oldCacheRoot
+		packageOwnerCache = oldCache
 	}
 }
 
@@ -492,6 +562,30 @@ func assertEvidenceRecord(t *testing.T, path, stream string, expected map[string
 		}
 	}
 	t.Fatalf("%s does not contain stream %q record matching %#v; candidates: %#v", path, stream, expected, candidates)
+}
+
+func assertCronCommandTarget(t *testing.T, command, wantPrimary string, wantPaths []string) {
+	t.Helper()
+	gotPrimary, gotPaths := cronCommandTargets(command)
+	if gotPrimary != wantPrimary {
+		t.Fatalf("cronCommandTargets(%q) primary=%q want=%q paths=%v", command, gotPrimary, wantPrimary, gotPaths)
+	}
+	if len(gotPaths) != len(wantPaths) {
+		t.Fatalf("cronCommandTargets(%q) paths=%v want=%v", command, gotPaths, wantPaths)
+	}
+	for i := range wantPaths {
+		if gotPaths[i] != wantPaths[i] {
+			t.Fatalf("cronCommandTargets(%q) paths=%v want=%v", command, gotPaths, wantPaths)
+		}
+	}
+}
+
+func assertCommandScriptTarget(t *testing.T, command, fallback, wantScript, wantInterpreter string) {
+	t.Helper()
+	gotScript, gotInterpreter := commandScriptTarget(command, fallback)
+	if gotScript != wantScript || gotInterpreter != wantInterpreter {
+		t.Fatalf("commandScriptTarget(%q, %q)=(%q, %q) want (%q, %q)", command, fallback, gotScript, gotInterpreter, wantScript, wantInterpreter)
+	}
 }
 
 func evidenceRecordsForStream(t *testing.T, path, stream string) []map[string]any {
