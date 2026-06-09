@@ -30,6 +30,7 @@ dist/dfir-collector-linux-386
 ## Basic Use
 
 ```sh
+./dist/dfir-collector-linux-amd64
 ./dist/dfir-collector-linux-amd64 --output /tmp/dfir-case
 ```
 
@@ -44,7 +45,7 @@ Useful flags:
 --timeout 10m
 ```
 
-Defaults are incident-response oriented: `--profile deep`, dual output (`legacy/` plus `ai/`), automatic archive creation, `--scan none`, and `--clean disabled`. If `--timeout` is omitted, no overall collection timeout is applied.
+Defaults are incident-response oriented: `--profile deep`, output directory `dfir_YYYYMMDDHHMMSS` under the current working directory, dual output (`legacy/` plus `ai/`), automatic archive creation, `--scan none`, and `--clean disabled`. If `--timeout` is omitted, no overall collection timeout is applied.
 
 ## Profiles
 
@@ -89,6 +90,8 @@ Every run also creates:
 <output>.tar.gz
 <output>/ai/archive_summary.json
 ```
+
+When using the release launcher `./dfir-collector`, the launcher changes to the tool directory before executing the architecture-specific binary, so the default `dfir_YYYYMMDDHHMMSS` output and tarball are created in the tool directory.
 
 `archive_summary.json` is written after the tarball is created, so it is an external report for the package hash and is not inside the tarball.
 

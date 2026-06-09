@@ -201,7 +201,7 @@ func writeCollectorStatus(out *output.Manager, collectorName, status, message st
 func parseArgs(args []string) (Config, error) {
 	cfg := Config{
 		CleanMode:  "disabled",
-		OutputDir:  filepath.Join("attk_log", "go-dev-session"),
+		OutputDir:  defaultOutputDir(time.Now()),
 		Profile:    defaultProfile,
 		ProfileDir: "profiles",
 		Scan:       "none",
@@ -219,6 +219,10 @@ func parseArgs(args []string) (Config, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+func defaultOutputDir(now time.Time) string {
+	return "dfir_" + now.Format("20060102150405")
 }
 
 func validateConfig(cfg Config) error {
