@@ -1,6 +1,6 @@
 # Linux DFIR 开发文档索引
 
-本目录存放开发过程、路线图、能力对齐和分析侧需求文档。项目根目录只保留面向使用者的 `README.md`、源码、配置、schema、skill 和 release 产物。
+本目录存放开发过程、路线图、能力对齐和分析侧需求文档。项目根目录只保留面向使用者的 `README.md`、源码、配置、schema 和 skill。发布压缩包不进入源码树，统一放到 GitHub Releases。
 
 ## 当前主文档
 

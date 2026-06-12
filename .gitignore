@@ -21,6 +21,7 @@ dist/
 bin/
 build/
 coverage.out
+/.artifacts/
 
 # Runtime / collection outputs
 /attk_log/
@@ -38,8 +39,8 @@ coverage.out
 *.zip
 *.zst
 
-# Release archives may be force-added intentionally; unpacked release trees stay local.
-/releases/*/
+# Release archives and unpacked release trees stay local; publish them through GitHub Releases.
+/releases/
 
 # Downloaded / third-party artifacts and local comparison outputs
 /attk_extracted/

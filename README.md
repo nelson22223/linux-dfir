@@ -27,6 +27,21 @@ dist/dfir-collector-linux-arm64
 dist/dfir-collector-linux-386
 ```
 
+## Release Downloads
+
+Packaged collector and analyzer skill archives are published as GitHub Release assets:
+
+- `linux-dfir-collector-v1.tar.gz`
+- `linux-dfir-collector-v1.tar.gz.sha256`
+- `linux-dfir-analyzer-skill-v1.tar.gz`
+- `linux-dfir-analyzer-skill-v1.tar.gz.sha256`
+
+Source git does not track release archives. To rebuild the local collector package from source:
+
+```sh
+scripts/package_release.sh
+```
+
 ## Basic Use
 
 ```sh
@@ -109,6 +124,19 @@ Scanner outputs go to:
 legacy/filescan/
 ai/raw/scanners/
 ai/evidence.jsonl
+```
+
+## Repository Layout
+
+```text
+cmd/                    CLI entrypoint
+internal/               Go packages for collection, output, archive, and parsing helpers
+profiles/               Collection profiles
+schemas/                Evidence/control JSON schemas
+skills/                 Codex analyzer skill source
+doc/                    Development roadmap, parity, and parser planning docs
+scripts/                Local build and release helper scripts
+.github/workflows/      CI definitions
 ```
 
 ## Mac Development Notes
