@@ -154,9 +154,10 @@ Pending Linux VM validation:
 - tmbrfix i386/amd64 32-bit compatibility smoke.
 - Real YARA/osquery execution, permissions, and timeout behavior.
 
-当前采集器路线图见 `GO_ATTK_COLLECTOR_ROADMAP_CN.md`。`PHASE_STATUS_CN.md` 是 Phase 1-14 的历史执行留档，保留 gate、Linux VM 检查清单和历史产物路径。
+当前采集器路线图见 `doc/GO_ATTK_COLLECTOR_ROADMAP_CN.md`。`doc/PHASE_STATUS_CN.md` 是 Phase 1-14 的历史执行留档，保留 gate、Linux VM 检查清单和历史产物路径。
 
 ## 路线图
 
-- `GO_ATTK_COLLECTOR_ROADMAP_CN.md`：采集器主路线图。维护已完成基线、当前采集缺口、优先级、后续 Go ATTK 采集 phase 和“只采事实”的边界。
-- `PARSER_REQUIREMENTS_CN.md`：下游 parser / AI agent 需求池。Parser 当前尚未开始实现，本文先收集分析、关联、报告、置信度和证据引用需求。
+- `doc/README.md`：开发文档索引。
+- `doc/GO_ATTK_COLLECTOR_ROADMAP_CN.md`：采集器主路线图。维护已完成基线、当前采集缺口、优先级、后续 Go ATTK 采集 phase 和“只采事实”的边界。
+- `doc/PARSER_REQUIREMENTS_CN.md`：下游 parser / AI agent 需求池。Parser 当前尚未开始实现，本文先收集分析、关联、报告、置信度和证据引用需求。

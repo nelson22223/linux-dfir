@@ -137,7 +137,7 @@ Phase 14 End-to-End：
 
 - 当前状态：Done；mac 侧主验收、文档和最终 subagent gate 已完成。
 - 目标范围：形成可交付的一次性应急采集包；Linux amd64/arm64/386 构建、quick/standard/deep/minimal-safe smoke、JSON/JSONL parse、manifest/archive 校验、operator guide。
-- 已完成：`README.md` operator guide、`PHASE14_E2E_CHECKLIST_CN.md`、`ATTK_ORIGINAL_GO_COMPARE_VM_20260604_CN.md`、mac 上 quick/standard/deep/minimal-safe/scanner profile smoke、deep archive、JSONL parse、manifest count、Linux amd64/arm64/386 交叉构建、Ubuntu ARM64 VM 原版 ATTK vs Go deep 非扫描采集对比。
+- 已完成：`../README.md` operator guide、`PHASE14_E2E_CHECKLIST_CN.md`、`ATTK_ORIGINAL_GO_COMPARE_VM_20260604_CN.md`、mac 上 quick/standard/deep/minimal-safe/scanner profile smoke、deep archive、JSONL parse、manifest count、Linux amd64/arm64/386 交叉构建、Ubuntu ARM64 VM 原版 ATTK vs Go deep 非扫描采集对比。
 - 原版对比结果：原版非扫描采集文件 366 个，Go legacy 非扫描采集文件 1421 个，Go AI stream 41 个；补齐 `legacy/system/kernel/modprobe_-n-l-v.out` 和 per-module `modinfo` legacy 后，`missing_or_partial=0`。
 - mac 上可完成构建、profile smoke、JSON/JSONL、archive、manifest、scanner skip；Linux VM 后补真实 `/proc`/`/sys`、root 权限、真实容器、真实 scanner、runtime smoke。
 - Linux VM 后继续按补测清单执行真实 runtime smoke。

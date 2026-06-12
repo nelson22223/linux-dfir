@@ -65,7 +65,7 @@ timeline
 collection_log
 ```
 
-历史 phase 示例中若仍出现 `parsed/*`，只用于说明旧迁移目标，实际实现与验收必须以上表、`README.md`、`ATTK_PARITY_QUICK_PERSISTENCE_CN.md`、`ATTK_PARITY_STANDARD_CORE_CN.md`、`ATTK_PARITY_DEEP_CONTAINER_SCANNER_CN.md` 为准。
+历史 phase 示例中若仍出现 `parsed/*`，只用于说明旧迁移目标，实际实现与验收必须以上表、`../README.md`、`ATTK_PARITY_QUICK_PERSISTENCE_CN.md`、`ATTK_PARITY_STANDARD_CORE_CN.md`、`ATTK_PARITY_DEEP_CONTAINER_SCANNER_CN.md` 为准。
 
 默认输出：
 

@@ -72,7 +72,7 @@ collector output
 已新增项目内 skill 原型：
 
 ```text
-skills/linux-dfir-analyzer/
+../skills/linux-dfir-analyzer/
   SKILL.md
   references/evidence-facets.md
   scripts/build_analysis_pack.py
@@ -82,7 +82,7 @@ skills/linux-dfir-analyzer/
 使用方式：
 
 ```sh
-python3 skills/linux-dfir-analyzer/scripts/build_analysis_pack.py \
+python3 ../skills/linux-dfir-analyzer/scripts/build_analysis_pack.py \
   --collector-output /path/to/collector-output \
   --out /tmp/linux-dfir-analysis-pack
 ```
@@ -156,8 +156,8 @@ Layer 1 当前 facet：
 Layer 2 参考文件：
 
 ```text
-skills/linux-dfir-analyzer/references/analysis-playbooks.md
-skills/linux-dfir-analyzer/references/report-contract.md
+../skills/linux-dfir-analyzer/references/analysis-playbooks.md
+../skills/linux-dfir-analyzer/references/report-contract.md
 ```
 
 ## 首批 Parser 能力需求
