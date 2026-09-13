@@ -101,7 +101,37 @@
 
 ---
 
-## 三、实现说明
+## 三、检测逻辑 v2（简化 + 行为判别）
+
+### 设计目标
+回答唯一问题：**这台主机是否被该家族攻陷**。检查从 7 组砍到 4 组，每组独立决定性（任一命中即 INFECTED），
+判定从 4 级简化为 3 态（CLEAN / REVIEW / INFECTED，退出码 0/1/3）。
+
+### 误报/漏报治理（v1 → v2）
+
+| v1 检查 | 误报风险 | v2 处置 |
+|---|---|---|
+| 未知哈希的 libnet.so → HIGH | **真实误报**：`libnet-devel` 包合法提供 /usr/lib64/libnet.so（发包库，导出 libnet_* 符号） | 改为**行为判别**：库必须 DEFINE ≥2 个 libc 文件遍历符号（stat/readdir/open/unlink 族）才算 hook 库——合法库只会 import 不会 export 这些符号；经真实样本验证 libnet.so.1 导出 17 个符号中 16 个为 hook 符号 |
+| 任意非白名单 preload 条目 → HIGH | 设备/产品可能合法使用 ld.so.preload | 降级为 REVIEW（软信号，不参与定性） |
+| sign.txt 存在即 CONFIRMED | 管理员可能自建同名文件 | 必须**内容为 64-hex bot id** 才定性 |
+| systemd unit / 日志痕迹 → MEDIUM | DDEI 正常也启用 xinetd.service；preload 损坏条目也产生同样报错 | 从检测器中**移除**（采集阶段仍收集这些证据供人工分析） |
+| 仅按名字找 libnet.so | **真实漏报**：家族换名（如 libkrb5.so 样式）即漏 | preload 条目**逐个按行为判别**（名字无关）；/proc maps 中映射的 .so 同样按符号验证 |
+| 仅按哈希定性 | **真实漏报**：攻击者在运营中迭代（本案 8-20 就更新过二进制），重建即换哈希 | 哈希 + 静态无 PT_INTERP + hook 符号集三重行为锚点，抗重建 |
+
+### 4 组决定性检查
+1. **preload_hooklib**：/etc/ld.so.preload 每个条目 → 目标文件按（家族哈希 ∨ DEFINE≥2 个 hook 符号）判别 → COMPROMISED；文件缺失或非 hook → REVIEW
+2. **xinetd_replaced**：/usr/sbin/xinetd 为（家族哈希 ∨ 静态无 PT_INTERP ∨ >1MB）→ COMPROMISED（原版 xinetd 为 ~166KB 动态链接）
+3. **live_behavior**：任一进程映射了 hook 库（按符号验证，非按名）∨ xinetd 进程存在 RWX 内存区 → COMPROMISED（/proc 由内核提供，用户态 rootkit 对静态二进制不可藏）
+4. **markers**：/root/sign.txt 内容为 64-hex ∨ /media/vbccsb、/home/vbccsb 存在 → COMPROMISED
+
+判定：任一 COMPROMISED → **INFECTED**；仅软信号 → **REVIEW**；无 → **CLEAN**。
+
+### 可信性设计
+- 检测器为纯静态 Go 二进制（CGO_ENABLED=0），不加载 libc → LD_PRELOAD 钩子无效；
+- /proc/*/maps、/proc/*/exe 为内核数据源；
+- 符号判别用标准库 debug/elf，版本无关实现（PT_INTERP 手动解析、导出以符号值非零判定）。
+
+## 四、实现说明
 
 - 检测器：`internal/detector/ddeirootkit/`（纯标准库、只读、无依赖；`Options.Root` 可指向 fixture 便于测试）
 - 集成：`internal/app/app.go` —— 默认先跑检测（终端结论 + 同目录 log + 退出码），

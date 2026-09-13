@@ -205,6 +205,6 @@ slim `ddei` profile. Original profiles (`deep`, `quick`, `standard`, ...) remain
 ./dfir-collector -no-detect -profile deep   # original full collection
 ```
 
-Exit codes: 0 clean, 1 suspicious, 2 likely infected, 3 infected.
+Exit codes: 0 clean, 1 review needed, 3 host compromised.
 Detector internals and the full case analysis (intrusion timeline, IOCs, evidence-to-collector
 mapping): see [doc/DDEI_ROOTKIT_DETECTOR.md](doc/DDEI_ROOTKIT_DETECTOR.md).

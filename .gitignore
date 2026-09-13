@@ -49,3 +49,4 @@ coverage.out
 
 # Go local workspace/cache
 go.work
+internal/detector/ddeirootkit/testdata/

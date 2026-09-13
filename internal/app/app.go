@@ -75,8 +75,7 @@ func Run(ctx context.Context, args []string) error {
 	var detectorReport *ddeirootkit.Report
 	if !cfg.NoDetect {
 		rep := ddeirootkit.Run(ddeirootkit.Options{
-			ScanProcMaps:  true,
-			ScanLogTraces: true,
+			ScanProcMaps: true,
 		})
 		detectorReport = &rep
 		ddeirootkit.Print(rep, os.Stdout)

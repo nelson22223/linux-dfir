@@ -1,20 +1,22 @@
-// Package ddeirootkit detects the "libnet.so / xinetd" LD_PRELOAD rootkit
-// family observed on Trend Micro DDEI appliances (case 2026-09, host
-// O-BJC-A-COR-DDEI2). The detector is intentionally dependency-free and
-// reads only; every check degrades gracefully when an artifact is absent.
+// Package ddeirootkit decides whether a host is compromised by the
+// "libnet.so / xinetd" LD_PRELOAD rootkit family (DDEI appliance incident,
+// 2026-09). The detector is a static Go binary: it does not load libc, so
+// LD_PRELOAD hooks have no effect on its view of the filesystem, and it
+// anchors on kernel-provided /proc data that user-space rootkits cannot
+// hide from it.
 //
-// Detection anchors (derived from the incident evidence package):
-//   - /etc/ld.so.preload referencing /usr/lib64/libnet.so (primary)
-//   - family hashes of the dropped library and the replaced xinetd binary
-//   - libnet.so mapped into live processes via /proc/*/maps
-//   - RWX mapping inside the running malicious xinetd (in-memory payload)
-//   - family marker files (/root/sign.txt, /media/vbccsb, /home/vbccsb)
-//   - xinetd systemd wants symlink + journal "cannot be preloaded" traces
+// Design goals (v2): few checks, each independently decisive, name-agnostic
+// where possible. A library is judged by behaviour (which libc symbols it
+// DEFINES — a preload hook must define stat/readdir/...), not by file name,
+// so renamed or rebuilt variants of the same builder are still caught while
+// legitimate same-name libraries (e.g. the libnet-devel packet library) are
+// not flagged.
 package ddeirootkit
 
 import (
 	"crypto/md5"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -25,45 +27,30 @@ import (
 	"time"
 )
 
-// Severity ranks a single check result.
-type Severity int
-
-const (
-	SeverityInfo Severity = iota
-	SeverityMedium
-	SeverityHigh
-	SeverityConfirmed
-)
-
-func (s Severity) String() string {
-	switch s {
-	case SeverityConfirmed:
-		return "CONFIRMED"
-	case SeverityHigh:
-		return "HIGH"
-	case SeverityMedium:
-		return "MEDIUM"
-	default:
-		return "INFO"
-	}
-}
-
-// Verdict is the overall machine state assessment.
+// Verdict answers the single question that matters: is this host compromised?
 type Verdict string
 
 const (
-	VerdictClean           Verdict = "CLEAN"
-	VerdictSuspicious      Verdict = "SUSPICIOUS"
-	VerdictLikelyInfected  Verdict = "LIKELY-INFECTED"
-	VerdictInfected        Verdict = "INFECTED"
+	VerdictClean     Verdict = "CLEAN"     // no family indicators
+	VerdictReview    Verdict = "REVIEW"    // soft signal only, manual look needed
+	VerdictInfected  Verdict = "INFECTED"  // decisive family indicator present
 )
 
-// Check is one detection result with its supporting evidence.
-type Check struct {
-	ID       string  `json:"id"`
-	Title    string  `json:"title"`
-	Severity Severity `json:"severity"`
-	Detail   string  `json:"detail,omitempty"`
+// Level of a single finding. Only Compromised findings decide the verdict.
+type Level string
+
+const (
+	LevelCompromised Level = "COMPROMISED"
+	LevelReview      Level = "REVIEW"
+	LevelInfo        Level = "INFO"
+)
+
+// Finding is one check result.
+type Finding struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Level  Level  `json:"level"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // ProcHit records a process observed with a family artifact mapped.
@@ -80,62 +67,110 @@ type Report struct {
 	Hostname  string    `json:"hostname,omitempty"`
 	Verdict   Verdict   `json:"verdict"`
 	Summary   string    `json:"summary,omitempty"`
-	Checks    []Check   `json:"checks"`
+	Findings  []Finding `json:"findings"`
 	ProcHits  []ProcHit `json:"proc_hits,omitempty"`
 }
 
-// Options tunes the detector. Root allows tests to point the detector at a
-// fixture tree; production callers leave it empty for "/".
+// Options tunes the detector. Root allows tests to point at a fixture tree;
+// production callers leave it empty for "/".
 type Options struct {
-	Root          string
-	SelfPID       int
-	Hostname      string
-	LogTailBytes  int64
-	ScanProcMaps  bool
-	ScanLogTraces bool
+	Root         string
+	SelfPID      int
+	Hostname     string
+	ScanProcMaps bool
 }
 
-// Known family indicators (case 2026-09 evidence package).
+// Family indicators from the incident evidence (exact matches, checked first).
 var (
 	FamilyName = "DDEI-libnet/xinetd rootkit"
 
-	preloadPath     = "/etc/ld.so.preload"
-	knownBadPreload = []string{"/usr/lib64/libnet.so", "/lib64/libnet.so", "libnet.so"}
+	preloadPath = "/etc/ld.so.preload"
 
 	knownLibMD5s = map[string]string{
-		"eebbba3f7ff5eb7ab0f64fc5074a6ce5": "/usr/lib64/libnet.so.1 sample (zip)",
+		"eebbba3f7ff5eb7ab0f64fc5074a6ce5": "libnet.so.1 sample (2026-09 case)",
 	}
 	knownLibSHA256s = map[string]string{
-		"acf5641c6c84774de63562a6e7080a0c4271451eef6429618f364c2308dd27cc": "/usr/lib64/libnet.so.1 sample (zip)",
+		"acf5641c6c84774de63562a6e7080a0c4271451eef6429618f364c2308dd27cc": "libnet.so.1 sample (2026-09 case)",
 	}
-	knownXinetdMD5 = "003bf75d53504889e13bf12d6af5b28f"
+	knownXinetdMD5    = "003bf75d53504889e13bf12d6af5b28f"
+	knownXinetdSHA256 = "8c175c21535907d437cb231a0bb91e2d52df51343ae62a11770b62d28f21d763"
 
-	// libCandidates are checked for existence + hash; the JVM helper of the
-	// same name under /usr/lib/jvm is legitimate and never scanned.
-	libCandidates = []string{
-		"/usr/lib64/libnet.so",
-		"/usr/lib64/libnet.so.1",
-		"/lib64/libnet.so",
-		"/lib64/libnet.so.1",
-	}
+	xinetdPath  = "/usr/sbin/xinetd"
+	xinetdLimit = int64(1 << 20) // stock CentOS 7 xinetd is a ~166 KiB dynamic ELF
 
-	xinetdPath      = "/usr/sbin/xinetd"
-	xinetdSizeLimit = int64(1 << 20) // legit CentOS 7 xinetd is ~166 KiB
-
-	markerFiles = []string{
-		"/root/sign.txt",
-		"/media/vbccsb",
-		"/home/vbccsb",
-	}
-
-	systemdWantsSymlink = "/etc/systemd/system/multi-user.target.wants/xinetd.service"
-	systemdUnitPath     = "/etc/systemd/system/xinetd.service"
-
-	logTraceFiles  = []string{"/var/log/messages", "/var/log/messages.1"}
-	logTraceNeedle = "ld.so.preload cannot be preloaded"
+	markerDirs = []string{"/media/vbccsb", "/home/vbccsb"}
+	signFile   = "/root/sign.txt"
 )
 
-// Run executes every check and assembles the report.
+// hookSymbols: a user-space preload rootkit MUST define these to intercept
+// libc callers. A legitimate library may import them but never define them.
+var hookSymbols = map[string]bool{
+	"stat": true, "stat64": true, "lstat": true, "lstat64": true,
+	"xstat": true, "fxstat": true, "lxstat": true, "__lxstat": true,
+	"statx": true, "fstatat": true, "newfstatat": true,
+	"readdir": true, "readdir64": true,
+	"fopen": true, "fopen64": true, "open": true, "open64": true,
+	"access": true, "unlink": true, "unlinkat": true,
+}
+
+// elfFacts is the behavioural fingerprint of a shared object.
+type elfFacts struct {
+	IsELF        bool
+	HasInterpreter bool // PT_INTERP present => dynamically linked program
+	DefinedHooks int    // count of hookSymbols DEFINED (exported)
+	DefinedTotal int
+}
+
+// inspectELF is a seam: tests replace it to avoid needing real ELF fixtures.
+var inspectELF = realInspectELF
+
+func realInspectELF(path string) elfFacts {
+	var facts elfFacts
+	raw, err := os.Open(path)
+	if err != nil {
+		return facts
+	}
+	defer raw.Close()
+	f, err := elf.NewFile(raw)
+	if err != nil {
+		return facts
+	}
+	defer f.Close()
+	facts.IsELF = true
+	for _, prog := range f.Progs {
+		if prog.Type == elf.PT_INTERP && prog.Filesz > 0 {
+			buf := make([]byte, prog.Filesz)
+			if _, err := raw.ReadAt(buf, int64(prog.Off)); err == nil && len(strings.TrimSpace(string(buf))) > 0 {
+				facts.HasInterpreter = true
+			}
+			break
+		}
+	}
+	syms, err := f.DynamicSymbols()
+	if err != nil {
+		return facts
+	}
+	for _, s := range syms {
+		// A DEFINED (exported) symbol carries an address; imports do not.
+		if s.Value == 0 {
+			continue
+		}
+		facts.DefinedTotal++
+		if hookSymbols[s.Name] {
+			facts.DefinedHooks++
+		}
+	}
+	return facts
+}
+
+// looksLikeHookLib: defines enough libc file-walk symbols to be a preload
+// hook. Real shared libraries (libnet packet lib, libesmtp, ...) define their
+// own namespace only, so this does not fire on them.
+func looksLikeHookLib(f elfFacts) bool {
+	return f.IsELF && f.DefinedHooks >= 2
+}
+
+// Run executes the checks and assembles the report.
 func Run(opts Options) Report {
 	if opts.Root == "" {
 		opts.Root = "/"
@@ -148,251 +183,260 @@ func Run(opts Options) Report {
 			opts.Hostname = h
 		}
 	}
-	if opts.LogTailBytes <= 0 {
-		opts.LogTailBytes = 512 * 1024
-	}
 	p := func(rel string) string { return filepath.Join(opts.Root, rel) }
 
 	rep := Report{Timestamp: time.Now().UTC(), Hostname: opts.Hostname}
 
-	checkPreload(p, &rep)
-	checkLibFiles(p, &rep)
+	suspiciousLibs := checkPreload(p, &rep)
 	checkXinetd(p, &rep)
 	checkMarkers(p, &rep)
-	checkSystemd(p, &rep)
 	if opts.ScanProcMaps {
-		checkProcMaps(opts, p, &rep)
-	}
-	if opts.ScanLogTraces {
-		checkLogTraces(opts, p, &rep)
+		checkProcMaps(opts, p, &rep, suspiciousLibs)
 	}
 
-	rep.Verdict, rep.Summary = conclude(rep.Checks)
+	rep.Verdict, rep.Summary = conclude(rep.Findings)
 	return rep
 }
 
-func conclude(checks []Check) (Verdict, string) {
-	var confirmed, high, medium int
-	for _, c := range checks {
-		switch c.Severity {
-		case SeverityConfirmed:
-			confirmed++
-		case SeverityHigh:
-			high++
-		case SeverityMedium:
-			medium++
+func conclude(findings []Finding) (Verdict, string) {
+	var compromised, review int
+	for _, f := range findings {
+		switch f.Level {
+		case LevelCompromised:
+			compromised++
+		case LevelReview:
+			review++
 		}
 	}
 	switch {
-	case confirmed > 0:
-		return VerdictInfected, fmt.Sprintf("%d confirmed family indicator(s)", confirmed)
-	case high >= 2:
-		return VerdictLikelyInfected, fmt.Sprintf("%d high-confidence indicator(s) without an exact family match", high)
-	case high == 1 || medium >= 2:
-		return VerdictSuspicious, fmt.Sprintf("weak indicators (high=%d medium=%d); manual review recommended", high, medium)
+	case compromised > 0:
+		var first string
+		for _, f := range findings {
+			if f.Level == LevelCompromised {
+				first = f.Title
+				break
+			}
+		}
+		return VerdictInfected, fmt.Sprintf("%d decisive indicator(s); first: %s", compromised, first)
+	case review > 0:
+		return VerdictReview, fmt.Sprintf("%d soft indicator(s) without a family match — manual review recommended", review)
 	default:
 		return VerdictClean, "no family indicators observed"
 	}
 }
 
-func (r *Report) add(c Check) { r.Checks = append(r.Checks, c) }
+func (r *Report) add(f Finding) { r.Findings = append(r.Findings, f) }
 
-func checkPreload(p func(string) string, rep *Report) {
+// checkPreload inspects every /etc/ld.so.preload entry. The referenced file
+// is judged by behaviour (defined hook symbols) or exact family hash, so the
+// check is name-agnostic: renamed family libraries still fire, legitimate
+// same-name libraries do not. Returns the paths that looked like hook libs.
+func checkPreload(p func(string) string, rep *Report) []string {
+	var suspicious []string
 	data, err := os.ReadFile(p(preloadPath))
 	if err != nil {
-		rep.add(Check{ID: "preload_entry", Title: "/etc/ld.so.preload", Severity: SeverityInfo,
-			Detail: "file absent or unreadable (clean baseline)"})
-		return
+		rep.add(Finding{ID: "preload_hooklib", Title: "/etc/ld.so.preload", Level: LevelInfo,
+			Detail: "file absent (clean baseline)"})
+		return suspicious
 	}
-	lines := nonEmptyLines(string(data))
-	if len(lines) == 0 {
-		rep.add(Check{ID: "preload_entry", Title: "/etc/ld.so.preload", Severity: SeverityInfo,
+	entries := nonEmptyLines(string(data))
+	if len(entries) == 0 {
+		rep.add(Finding{ID: "preload_hooklib", Title: "/etc/ld.so.preload", Level: LevelInfo,
 			Detail: "present but empty"})
-		return
+		return suspicious
 	}
-	for _, line := range lines {
-		for _, bad := range knownBadPreload {
-			if strings.Contains(line, bad) {
-				rep.add(Check{ID: "preload_entry", Title: "/etc/ld.so.preload references libnet.so",
-					Severity: SeverityConfirmed,
-					Detail: fmt.Sprintf("entry %q matches the DDEI rootkit family loader path", line)})
-				return
-			}
-		}
-	}
-	rep.add(Check{ID: "preload_entry", Title: "/etc/ld.so.preload has unexpected entries",
-		Severity: SeverityHigh,
-		Detail: "entries: " + strings.Join(lines, ", ") + " — verify package ownership (rpm -qf)"})
-}
-
-func checkLibFiles(p func(string) string, rep *Report) {
-	foundAny := false
-	for _, cand := range libCandidates {
-		full := p(cand)
+	for _, entry := range entries {
+		full := p(strings.TrimSpace(entry))
 		info, err := os.Stat(full)
-		if err != nil || info.IsDir() {
+		if err != nil {
+			rep.add(Finding{ID: "preload_hooklib", Title: "preload entry points to missing file",
+				Level: LevelReview,
+				Detail: fmt.Sprintf("%s does not exist (broken or leftover entry)", entry)})
 			continue
 		}
-		foundAny = true
+		if info.IsDir() {
+			continue
+		}
 		md5s, sha := hashFile(full)
-		if note, ok := knownLibMD5s[md5s]; ok {
-			rep.add(Check{ID: "libnet_file", Title: "family library file present",
-				Severity: SeverityConfirmed, Detail: fmt.Sprintf("%s md5=%s (%s)", cand, md5s, note)})
-			return
+		if _, ok := knownLibMD5s[md5s]; ok {
+			rep.add(Finding{ID: "preload_hooklib", Title: "family rootkit library is preloaded",
+				Level: LevelCompromised,
+				Detail: fmt.Sprintf("%s md5=%s (exact family match)", entry, md5s)})
+			suspicious = append(suspicious, entry)
+			continue
 		}
-		if note, ok := knownLibSHA256s[sha]; ok {
-			rep.add(Check{ID: "libnet_file", Title: "family library file present",
-				Severity: SeverityConfirmed, Detail: fmt.Sprintf("%s sha256=%s (%s)", cand, sha, note)})
-			return
+		if _, ok := knownLibSHA256s[sha]; ok {
+			rep.add(Finding{ID: "preload_hooklib", Title: "family rootkit library is preloaded",
+				Level: LevelCompromised,
+				Detail: fmt.Sprintf("%s sha256=%s (exact family match)", entry, sha)})
+			suspicious = append(suspicious, entry)
+			continue
 		}
-		rep.add(Check{ID: "libnet_file", Title: "unexpected libnet.so on system library path",
-			Severity: SeverityHigh,
-			Detail: fmt.Sprintf("%s size=%d md5=%s — not a known family hash and not package-owned on stock CentOS", cand, info.Size(), md5s)})
+		if facts := inspectELF(full); looksLikeHookLib(facts) {
+			rep.add(Finding{ID: "preload_hooklib", Title: "preload entry is a libc-hook library",
+				Level: LevelCompromised,
+				Detail: fmt.Sprintf("%s DEFINES %d libc file-walk symbols (stat/readdir/open family) — a legitimate library never exports these", entry, facts.DefinedHooks)})
+			suspicious = append(suspicious, entry)
+			continue
+		}
+		rep.add(Finding{ID: "preload_hooklib", Title: "unexpected preload entry (not family)",
+			Level: LevelReview,
+			Detail: fmt.Sprintf("%s exists but shows no hook behaviour (defined hooks=%d) — verify ownership if unexpected", entry, factsOf(full))})
 	}
-	if !foundAny {
-		rep.add(Check{ID: "libnet_file", Title: "libnet.so on system paths", Severity: SeverityInfo,
-			Detail: "no libnet.so under /usr/lib64 or /lib64"})
-	}
+	return suspicious
 }
 
+func factsOf(path string) int { return inspectELF(path).DefinedHooks }
+
+// checkXinetd decides whether /usr/sbin/xinetd was replaced. Stock xinetd is
+// a small dynamically linked ELF; the family dropper is a large stripped
+// static PIE. Either an exact hash or the static/large shape is decisive.
 func checkXinetd(p func(string) string, rep *Report) {
 	full := p(xinetdPath)
 	info, err := os.Stat(full)
 	if err != nil {
-		rep.add(Check{ID: "xinetd_binary", Title: "/usr/sbin/xinetd", Severity: SeverityInfo,
-			Detail: "file absent (host without xinetd package)"})
+		rep.add(Finding{ID: "xinetd_replaced", Title: "/usr/sbin/xinetd", Level: LevelInfo,
+			Detail: "file absent (host without xinetd)"})
 		return
 	}
-	md5s, _ := hashFile(full)
-	if md5s == knownXinetdMD5 {
-		rep.add(Check{ID: "xinetd_binary", Title: "xinetd binary replaced by family dropper",
-			Severity: SeverityConfirmed,
-			Detail: fmt.Sprintf("md5=%s matches the 5.9 MB Rust dropper sample", md5s)})
+	md5s, sha := hashFile(full)
+	if md5s == knownXinetdMD5 || sha == knownXinetdSHA256 {
+		rep.add(Finding{ID: "xinetd_replaced", Title: "xinetd binary is the family dropper",
+			Level: LevelCompromised,
+			Detail: fmt.Sprintf("hash matches the 5.9 MB Rust dropper sample (md5=%s)", md5s)})
 		return
 	}
-	if info.Size() > xinetdSizeLimit {
-		rep.add(Check{ID: "xinetd_binary", Title: "xinetd binary size anomaly",
-			Severity: SeverityHigh,
-			Detail: fmt.Sprintf("size=%d exceeds 1 MiB; stock CentOS 7 xinetd is a ~166 KiB dynamic binary — consistent with a statically linked replacement", info.Size())})
+	facts := inspectELF(full)
+	if facts.IsELF && !facts.HasInterpreter {
+		rep.add(Finding{ID: "xinetd_replaced", Title: "xinetd binary is statically linked",
+			Level: LevelCompromised,
+			Detail: "no PT_INTERP: stock xinetd is dynamically linked against libc — a static build at /usr/sbin/xinetd is a replacement (family droppers are static PIE)"})
+		return
 	}
-	ctime := ctimeOf(full)
-	if !ctime.IsZero() && info.ModTime().Before(ctime.AddDate(0, 0, -180)) {
-		rep.add(Check{ID: "xinetd_binary", Title: "xinetd mtime/ctime inversion (timestomp)",
-			Severity: SeverityMedium,
-			Detail: fmt.Sprintf("mtime=%s ctime=%s — modification time predates inode change by >180 days", info.ModTime().UTC().Format(time.RFC3339), ctime.UTC().Format(time.RFC3339))})
+	if info.Size() > xinetdLimit {
+		rep.add(Finding{ID: "xinetd_replaced", Title: "xinetd binary size anomaly",
+			Level: LevelCompromised,
+			Detail: fmt.Sprintf("size=%d exceeds 1 MiB; stock xinetd is ~166 KiB", info.Size())})
+		return
 	}
+	rep.add(Finding{ID: "xinetd_replaced", Title: "/usr/sbin/xinetd", Level: LevelInfo,
+		Detail: fmt.Sprintf("size=%d, dynamically linked — consistent with stock package", info.Size())})
 }
 
+// checkMarkers looks for family marker files. /root/sign.txt only counts
+// when its content is a 64-hex bot id (the dropper's actual format), which
+// excludes admin-made files of the same name.
 func checkMarkers(p func(string) string, rep *Report) {
-	hit := false
-	for _, m := range markerFiles {
-		if _, err := os.Stat(p(m)); err == nil {
-			rep.add(Check{ID: "marker_file", Title: "family marker present",
-				Severity: SeverityConfirmed, Detail: m + " exists (dropper marker/sign file)"})
-			hit = true
+	for _, dir := range markerDirs {
+		if _, err := os.Stat(p(dir)); err == nil {
+			rep.add(Finding{ID: "markers", Title: "family marker directory present",
+				Level: LevelCompromised, Detail: dir + " exists (operator-named marker)"})
 		}
 	}
-	if !hit {
-		rep.add(Check{ID: "marker_file", Title: "family marker files", Severity: SeverityInfo,
-			Detail: "none of " + strings.Join(markerFiles, ", ") + " found"})
-	}
-}
-
-func checkSystemd(p func(string) string, rep *Report) {
-	link := p(systemdWantsSymlink)
-	info, err := os.Lstat(link)
+	data, err := os.ReadFile(p(signFile))
 	if err != nil {
-		rep.add(Check{ID: "systemd_unit", Title: "xinetd systemd persistence", Severity: SeverityInfo,
-			Detail: "no multi-user.target.wants/xinetd.service symlink"})
 		return
 	}
-	ctime := ctimeOf(link)
-	detail := fmt.Sprintf("mode=%s", info.Mode().String())
-	if !ctime.IsZero() {
-		detail += fmt.Sprintf(" created/changed=%s (incident window Aug 2026)", ctime.UTC().Format(time.RFC3339))
+	content := strings.TrimSpace(string(data))
+	if isHex64(content) {
+		rep.add(Finding{ID: "markers", Title: "family infection marker /root/sign.txt",
+			Level: LevelCompromised, Detail: "content is a 64-hex bot id: " + content})
+	} else if content != "" {
+		rep.add(Finding{ID: "markers", Title: "/root/sign.txt present (content not a bot id)",
+			Level: LevelInfo, Detail: fmt.Sprintf("content %q is not the family 64-hex format; not counted", truncate(content, 40))})
 	}
-	rep.add(Check{ID: "systemd_unit", Title: "xinetd.service enabled via multi-user.target.wants",
-		Severity: SeverityMedium, Detail: detail})
 }
 
-func checkProcMaps(opts Options, p func(string) string, rep *Report) {
+// checkProcMaps anchors on kernel-provided /proc data. Two decisive signs:
+// any process mapping a hook-like library (verified by symbols, not name),
+// and RWX memory inside a running xinetd (the in-memory payload stage).
+func checkProcMaps(opts Options, p func(string) string, rep *Report, suspiciousLibs []string) {
 	entries, err := os.ReadDir(p("/proc"))
 	if err != nil {
-		rep.add(Check{ID: "proc_maps", Title: "/proc maps scan", Severity: SeverityInfo,
+		rep.add(Finding{ID: "live_behavior", Title: "/proc scan", Level: LevelInfo,
 			Detail: "cannot enumerate /proc"})
 		return
 	}
-	libProcs := map[int]ProcHit{}
-	rwxProcs := map[int]ProcHit{}
+	hookPaths := map[string]bool{}
+	for _, lib := range suspiciousLibs {
+		hookPaths[strings.TrimSpace(lib)] = true
+	}
+	hookByPid := map[int]ProcHit{}
+	rwxByPid := map[int]ProcHit{}
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil || pid == opts.SelfPID {
 			continue
 		}
-		mapsPath := p("/proc/" + e.Name() + "/maps")
-		data, err := os.ReadFile(mapsPath)
+		procDir := p("/proc/" + e.Name())
+		data, err := os.ReadFile(procDir + "/maps")
 		if err != nil {
 			continue
 		}
-		hit := ProcHit{PID: pid, Comm: commOf(p("/proc/" + e.Name())), Exe: exeOf(p("/proc/" + e.Name()))}
+		exe := exeOf(procDir)
+		hit := ProcHit{PID: pid, Comm: commOf(procDir), Exe: exe}
 		for _, line := range strings.Split(string(data), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) < 6 {
 				continue
 			}
 			perms, path := fields[1], fields[5]
-			if strings.Contains(path, "libnet.so") {
-				libProcs[pid] = hit
+			if strings.HasPrefix(perms, "rwx") && !strings.HasPrefix(path, "[") && exe == xinetdPath {
+				rwxByPid[pid] = ProcHit{PID: pid, Comm: hit.Comm, Exe: exe, Note: "rwx region " + fields[0]}
+				continue
 			}
-			if strings.HasPrefix(perms, "rwx") && !strings.HasPrefix(path, "[") && hit.Exe == xinetdPath {
-				rwxProcs[pid] = ProcHit{PID: pid, Comm: hit.Comm, Exe: hit.Exe, Note: "rwx region: " + fields[0]}
+			if path == "" || hookPaths[path] || strings.HasPrefix(path, "/memfd:") {
+				continue
+			}
+			// verify mapped library by behaviour, not by name
+			if _, checked := hookPaths[path]; !checked && strings.HasSuffix(path, ".so") {
+				facts := inspectELF(p(path))
+				if looksLikeHookLib(facts) {
+					hookPaths[path] = true
+				} else {
+					hookPaths[path] = false
+				}
+			}
+			if hookPaths[path] {
+				hookByPid[pid] = hit
 			}
 		}
 	}
-	if len(libProcs) > 0 {
-		pids := sortedPIDs(libProcs)
-		rep.ProcHits = append(rep.ProcHits, mapValues(libProcs)...)
-		rep.add(Check{ID: "proc_maps", Title: "libnet.so mapped in live processes",
-			Severity: SeverityHigh,
-			Detail: fmt.Sprintf("%d process(es) map the family library (pids: %s) — library is loaded via ld.so.preload", len(libProcs), pids)})
+	if len(hookByPid) > 0 {
+		rep.ProcHits = append(rep.ProcHits, mapValues(hookByPid)...)
+		rep.add(Finding{ID: "live_behavior", Title: "hook library mapped in live processes",
+			Level: LevelCompromised,
+			Detail: fmt.Sprintf("%d process(es) map a libc-hook library (pids: %s)", len(hookByPid), sortedPIDs(hookByPid))})
 	}
-	if len(rwxProcs) > 0 {
-		rep.ProcHits = append(rep.ProcHits, mapValues(rwxProcs)...)
-		rep.add(Check{ID: "proc_maps", Title: "RWX region inside running xinetd",
-			Severity: SeverityHigh,
-			Detail: "xinetd keeps writable+executable memory — matches the in-memory decrypted payload stage"})
+	if len(rwxByPid) > 0 {
+		rep.ProcHits = append(rep.ProcHits, mapValues(rwxByPid)...)
+		rep.add(Finding{ID: "live_behavior", Title: "RWX memory inside running xinetd",
+			Level: LevelCompromised,
+			Detail: "xinetd keeps writable+executable mappings — matches the in-memory decrypted payload stage"})
 	}
-	if len(libProcs) == 0 && len(rwxProcs) == 0 {
-		rep.add(Check{ID: "proc_maps", Title: "/proc maps scan", Severity: SeverityInfo,
-			Detail: "no process maps libnet.so and no xinetd RWX region"})
+	if len(hookByPid) == 0 && len(rwxByPid) == 0 {
+		rep.add(Finding{ID: "live_behavior", Title: "/proc scan", Level: LevelInfo,
+			Detail: "no process maps a hook library; no RWX region in xinetd"})
 	}
 }
 
-func checkLogTraces(opts Options, p func(string) string, rep *Report) {
-	var matched []string
-	for _, f := range logTraceFiles {
-		path := p(f)
-		data, err := readFileTail(path, opts.LogTailBytes)
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.Contains(line, logTraceNeedle) || strings.Contains(line, "libnet.so") {
-				matched = append(matched, strings.TrimSpace(line))
-				if len(matched) >= 5 {
-					break
-				}
-			}
+func isHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
 		}
 	}
-	if len(matched) > 0 {
-		rep.add(Check{ID: "log_traces", Title: "loader errors in system logs",
-			Severity: SeverityMedium,
-			Detail: fmt.Sprintf("%d matching line(s), e.g. %q", len(matched), firstNonEmpty(matched))})
-	} else {
-		rep.add(Check{ID: "log_traces", Title: "loader errors in system logs", Severity: SeverityInfo,
-			Detail: "no ld.so.preload failure lines in recent messages logs"})
+	return true
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
+	return s[:n] + "..."
 }
 
 func hashFile(path string) (md5s, sha string) {
@@ -403,29 +447,6 @@ func hashFile(path string) (md5s, sha string) {
 	m := md5.Sum(data)
 	s := sha256.Sum256(data)
 	return hex.EncodeToString(m[:]), hex.EncodeToString(s[:])
-}
-
-func readFileTail(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	size := info.Size()
-	if limit <= 0 || size <= limit {
-		data, err := os.ReadFile(path)
-		return data, err
-	}
-	if _, err := f.Seek(size-limit, 0); err != nil {
-		return nil, err
-	}
-	buf := make([]byte, limit)
-	n, err := f.Read(buf)
-	return buf[:n], err
 }
 
 func commOf(procDir string) string {
@@ -454,15 +475,6 @@ func nonEmptyLines(s string) []string {
 		out = append(out, line)
 	}
 	return out
-}
-
-func firstNonEmpty(items []string) string {
-	for _, s := range items {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 func sortedPIDs(m map[int]ProcHit) string {
