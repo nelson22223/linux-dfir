@@ -13,6 +13,7 @@ import (
 	"linux-dfir/internal/archive"
 	"linux-dfir/internal/collectors"
 	"linux-dfir/internal/collectors/logs"
+	"linux-dfir/internal/detector/ddeirootkit"
 	"linux-dfir/internal/evidence"
 	"linux-dfir/internal/output"
 	"linux-dfir/internal/profile"
@@ -22,17 +23,28 @@ import (
 )
 
 const (
-	defaultProfile = "deep"
+	defaultProfile = "ddei"
 	defaultMode    = string(output.ModeDual)
 )
 
+// detectorExitCode carries the DDEI rootkit verdict to the process exit code
+// (0 clean, 1 suspicious, 2 likely, 3 infected) so responders can script on it.
+var detectorExitCode int
+
+// ExitCode returns the detector-driven exit code (0 when detection was
+// skipped or the host is clean).
+func ExitCode() int { return detectorExitCode }
+
 type Config struct {
-	CleanMode  string
-	OutputDir  string
-	Profile    string
-	ProfileDir string
-	Scan       string
-	Timeout    string
+	CleanMode   string
+	OutputDir   string
+	Profile     string
+	ProfileDir  string
+	Scan        string
+	Timeout     string
+	DetectOnly  bool
+	NoDetect    bool
+	DetectorLog string
 }
 
 func Run(ctx context.Context, args []string) error {
@@ -59,6 +71,26 @@ func Run(ctx context.Context, args []string) error {
 	logs.Configure(logs.Options{JournalMaxLines: profileDef.Limits.JournalMaxLines})
 	runCtx, cancel, scannerTimeout := optionalTimeoutContext(ctx, cfg.Timeout)
 	defer cancel()
+
+	var detectorReport *ddeirootkit.Report
+	if !cfg.NoDetect {
+		rep := ddeirootkit.Run(ddeirootkit.Options{
+			ScanProcMaps:  true,
+			ScanLogTraces: true,
+		})
+		detectorReport = &rep
+		ddeirootkit.Print(rep, os.Stdout)
+		logPath, logErr := ddeirootkit.WriteLog(rep, cfg.DetectorLog)
+		if logErr != nil {
+			fmt.Fprintf(os.Stderr, "detector log write failed: %v\n", logErr)
+		} else {
+			fmt.Printf("detector log: %s\n", logPath)
+		}
+		detectorExitCode = ddeirootkit.ExitCode(rep.Verdict)
+		if cfg.DetectOnly {
+			return nil
+		}
+	}
 
 	sess, err := session.New("", time.Now().UTC())
 	if err != nil {
@@ -93,6 +125,12 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	finalCollectors := append([]string{}, profileDef.Collectors...)
+	if detectorReport != nil {
+		if err := out.WriteAIJSON("ddei_rootkit/report.json", detectorReport, "detector"); err != nil {
+			return err
+		}
+		finalCollectors = appendIfMissing(finalCollectors, "detector")
+	}
 	registry := collectors.Registry()
 	for _, collectorName := range profileDef.Collectors {
 		if collectorName == "session" || collectorName == "scanner" {
@@ -214,6 +252,9 @@ func parseArgs(args []string) (Config, error) {
 	fs.StringVar(&cfg.ProfileDir, "profile-dir", cfg.ProfileDir, "directory containing collection profiles")
 	fs.StringVar(&cfg.Scan, "scan", cfg.Scan, "scanner: none, tmbrfix, yara, osquery")
 	fs.StringVar(&cfg.Timeout, "timeout", cfg.Timeout, "optional overall collection timeout, disabled when omitted")
+	fs.BoolVar(&cfg.DetectOnly, "detect-only", false, "run only the DDEI rootkit detector (no collection/archive)")
+	fs.BoolVar(&cfg.NoDetect, "no-detect", false, "skip the DDEI rootkit detector (original collection behaviour)")
+	fs.StringVar(&cfg.DetectorLog, "detector-log-dir", "", "directory for the detector log file (default: directory of the executable)")
 
 	if err := fs.Parse(args); err != nil {
 		return cfg, err

@@ -189,3 +189,22 @@ Pending Linux VM validation:
 - `doc/README.md`：开发文档索引。
 - `doc/GO_ATTK_COLLECTOR_ROADMAP_CN.md`：采集器主路线图。维护已完成基线、当前采集缺口、优先级、后续 Go ATTK 采集 phase 和“只采事实”的边界。
 - `doc/PARSER_REQUIREMENTS_CN.md`：下游 parser / AI agent 需求池。Parser 当前尚未开始实现，本文先收集分析、关联、报告、置信度和证据引用需求。
+
+---
+
+## Branch: ddei-rootkit-detector
+
+Customized build for the **libnet.so/xinetd LD_PRELOAD rootkit family** (Trend Micro DDEI
+appliance incident, 2026-09). Default execution runs the family detector first — terminal
+verdict, same-directory log, scriptable exit code — then collects and archives using the
+slim `ddei` profile. Original profiles (`deep`, `quick`, `standard`, ...) remain available.
+
+```sh
+./dfir-collector                 # detect (verdict + log) + focused collection + tar.gz
+./dfir-collector -detect-only    # fast verdict only
+./dfir-collector -no-detect -profile deep   # original full collection
+```
+
+Exit codes: 0 clean, 1 suspicious, 2 likely infected, 3 infected.
+Detector internals and the full case analysis (intrusion timeline, IOCs, evidence-to-collector
+mapping): see [doc/DDEI_ROOTKIT_DETECTOR.md](doc/DDEI_ROOTKIT_DETECTOR.md).

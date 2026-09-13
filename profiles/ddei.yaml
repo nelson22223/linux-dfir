@@ -1,0 +1,13 @@
+name: ddei
+description: DDEI rootkit branch default — focused triage for the libnet.so/xinetd family (detector output plus supporting artifacts).
+collectors:
+  - host
+  - system
+  - process
+  - network
+  - persistence
+  - logs
+limits:
+  max_file_size: 104857600
+  timeout: 10m
+  journal_max_lines: 5000
