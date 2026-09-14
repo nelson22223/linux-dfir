@@ -31,9 +31,9 @@ import (
 type Verdict string
 
 const (
-	VerdictClean     Verdict = "CLEAN"     // no family indicators
-	VerdictReview    Verdict = "REVIEW"    // soft signal only, manual look needed
-	VerdictInfected  Verdict = "INFECTED"  // decisive family indicator present
+	VerdictClean    Verdict = "CLEAN"    // no family indicators
+	VerdictReview   Verdict = "REVIEW"   // soft signal only, manual look needed
+	VerdictInfected Verdict = "INFECTED" // decisive family indicator present
 )
 
 // Level of a single finding. Only Compromised findings decide the verdict.
@@ -115,10 +115,10 @@ var hookSymbols = map[string]bool{
 
 // elfFacts is the behavioural fingerprint of a shared object.
 type elfFacts struct {
-	IsELF        bool
+	IsELF          bool
 	HasInterpreter bool // PT_INTERP present => dynamically linked program
-	DefinedHooks int    // count of hookSymbols DEFINED (exported)
-	DefinedTotal int
+	DefinedHooks   int  // count of hookSymbols DEFINED (exported)
+	DefinedTotal   int
 }
 
 // inspectELF is a seam: tests replace it to avoid needing real ELF fixtures.
@@ -250,7 +250,7 @@ func checkPreload(p func(string) string, rep *Report) []string {
 		info, err := os.Stat(full)
 		if err != nil {
 			rep.add(Finding{ID: "preload_hooklib", Title: "preload entry points to missing file",
-				Level: LevelReview,
+				Level:  LevelReview,
 				Detail: fmt.Sprintf("%s does not exist (broken or leftover entry)", entry)})
 			continue
 		}
@@ -260,27 +260,27 @@ func checkPreload(p func(string) string, rep *Report) []string {
 		md5s, sha := hashFile(full)
 		if _, ok := knownLibMD5s[md5s]; ok {
 			rep.add(Finding{ID: "preload_hooklib", Title: "family rootkit library is preloaded",
-				Level: LevelCompromised,
+				Level:  LevelCompromised,
 				Detail: fmt.Sprintf("%s md5=%s (exact family match)", entry, md5s)})
 			suspicious = append(suspicious, entry)
 			continue
 		}
 		if _, ok := knownLibSHA256s[sha]; ok {
 			rep.add(Finding{ID: "preload_hooklib", Title: "family rootkit library is preloaded",
-				Level: LevelCompromised,
+				Level:  LevelCompromised,
 				Detail: fmt.Sprintf("%s sha256=%s (exact family match)", entry, sha)})
 			suspicious = append(suspicious, entry)
 			continue
 		}
 		if facts := inspectELF(full); looksLikeHookLib(facts) {
 			rep.add(Finding{ID: "preload_hooklib", Title: "preload entry is a libc-hook library",
-				Level: LevelCompromised,
+				Level:  LevelCompromised,
 				Detail: fmt.Sprintf("%s DEFINES %d libc file-walk symbols (stat/readdir/open family) — a legitimate library never exports these", entry, facts.DefinedHooks)})
 			suspicious = append(suspicious, entry)
 			continue
 		}
 		rep.add(Finding{ID: "preload_hooklib", Title: "unexpected preload entry (not family)",
-			Level: LevelReview,
+			Level:  LevelReview,
 			Detail: fmt.Sprintf("%s exists but shows no hook behaviour (defined hooks=%d) — verify ownership if unexpected", entry, factsOf(full))})
 	}
 	return suspicious
@@ -302,20 +302,20 @@ func checkXinetd(p func(string) string, rep *Report) {
 	md5s, sha := hashFile(full)
 	if md5s == knownXinetdMD5 || sha == knownXinetdSHA256 {
 		rep.add(Finding{ID: "xinetd_replaced", Title: "xinetd binary is the family dropper",
-			Level: LevelCompromised,
+			Level:  LevelCompromised,
 			Detail: fmt.Sprintf("hash matches the 5.9 MB Rust dropper sample (md5=%s)", md5s)})
 		return
 	}
 	facts := inspectELF(full)
 	if facts.IsELF && !facts.HasInterpreter {
 		rep.add(Finding{ID: "xinetd_replaced", Title: "xinetd binary is statically linked",
-			Level: LevelCompromised,
+			Level:  LevelCompromised,
 			Detail: "no PT_INTERP: stock xinetd is dynamically linked against libc — a static build at /usr/sbin/xinetd is a replacement (family droppers are static PIE)"})
 		return
 	}
 	if info.Size() > xinetdLimit {
 		rep.add(Finding{ID: "xinetd_replaced", Title: "xinetd binary size anomaly",
-			Level: LevelCompromised,
+			Level:  LevelCompromised,
 			Detail: fmt.Sprintf("size=%d exceeds 1 MiB; stock xinetd is ~166 KiB", info.Size())})
 		return
 	}
@@ -405,13 +405,13 @@ func checkProcMaps(opts Options, p func(string) string, rep *Report, suspiciousL
 	if len(hookByPid) > 0 {
 		rep.ProcHits = append(rep.ProcHits, mapValues(hookByPid)...)
 		rep.add(Finding{ID: "live_behavior", Title: "hook library mapped in live processes",
-			Level: LevelCompromised,
+			Level:  LevelCompromised,
 			Detail: fmt.Sprintf("%d process(es) map a libc-hook library (pids: %s)", len(hookByPid), sortedPIDs(hookByPid))})
 	}
 	if len(rwxByPid) > 0 {
 		rep.ProcHits = append(rep.ProcHits, mapValues(rwxByPid)...)
 		rep.add(Finding{ID: "live_behavior", Title: "RWX memory inside running xinetd",
-			Level: LevelCompromised,
+			Level:  LevelCompromised,
 			Detail: "xinetd keeps writable+executable mappings — matches the in-memory decrypted payload stage"})
 	}
 	if len(hookByPid) == 0 && len(rwxByPid) == 0 {

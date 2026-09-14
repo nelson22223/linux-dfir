@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -63,15 +64,9 @@ func Run(ctx context.Context, args []string) error {
 	cfg.Scan = strings.ToLower(cfg.Scan)
 	cfg.CleanMode = strings.ToLower(cfg.CleanMode)
 
-	profileDef, err := profile.Load(cfg.ProfileDir, cfg.Profile)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return err
-	}
-	logs.Configure(logs.Options{JournalMaxLines: profileDef.Limits.JournalMaxLines})
-	runCtx, cancel, scannerTimeout := optionalTimeoutContext(ctx, cfg.Timeout)
-	defer cancel()
-
+	// The detector runs before anything that touches the profile system so a
+	// standalone binary on a victim host always produces a verdict even when
+	// no profiles/ directory ships next to the executable.
 	var detectorReport *ddeirootkit.Report
 	if !cfg.NoDetect {
 		rep := ddeirootkit.Run(ddeirootkit.Options{
@@ -90,6 +85,15 @@ func Run(ctx context.Context, args []string) error {
 			return nil
 		}
 	}
+
+	profileDef, err := loadProfileOrDefault(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return err
+	}
+	logs.Configure(logs.Options{JournalMaxLines: profileDef.Limits.JournalMaxLines})
+	runCtx, cancel, scannerTimeout := optionalTimeoutContext(ctx, cfg.Timeout)
+	defer cancel()
 
 	sess, err := session.New("", time.Now().UTC())
 	if err != nil {
@@ -125,7 +129,13 @@ func Run(ctx context.Context, args []string) error {
 
 	finalCollectors := append([]string{}, profileDef.Collectors...)
 	if detectorReport != nil {
-		if err := out.WriteAIJSON("ddei_rootkit/report.json", detectorReport, "detector"); err != nil {
+		// The AI stream deliberately carries no verdicts; the detector report
+		// belongs in the human-readable legacy tree (legacy/ddei_rootkit/).
+		if blob, err := json.MarshalIndent(detectorReport, "", "  "); err == nil {
+			if err := out.WriteLegacy("ddei_rootkit/report.json", append(blob, '\n'), "detector"); err != nil {
+				return err
+			}
+		} else {
 			return err
 		}
 		finalCollectors = appendIfMissing(finalCollectors, "detector")
@@ -263,6 +273,30 @@ func parseArgs(args []string) (Config, error) {
 
 func defaultOutputDir(now time.Time) string {
 	return "dfir_" + now.Format("20060102150405")
+}
+
+// loadProfileOrDefault loads the requested profile, falling back to a
+// built-in definition of the branch default when the binary runs standalone
+// (no profiles/ directory next to the executable).
+func loadProfileOrDefault(cfg Config) (profile.Definition, error) {
+	def, err := profile.Load(cfg.ProfileDir, cfg.Profile)
+	if err == nil {
+		return def, nil
+	}
+	if cfg.Profile != defaultProfile {
+		return profile.Definition{}, err
+	}
+	fmt.Fprintf(os.Stderr, "warning: %v — using built-in %s profile\n", err, defaultProfile)
+	return profile.Definition{
+		Name:        defaultProfile,
+		Description: "built-in DDEI triage profile (detector output plus supporting artifacts)",
+		Collectors:  []string{"host", "system", "process", "network", "persistence", "logs"},
+		Limits: profile.Limits{
+			MaxFileSize:     104857600,
+			Timeout:         "10m",
+			JournalMaxLines: 5000,
+		},
+	}, nil
 }
 
 func validateConfig(cfg Config) error {

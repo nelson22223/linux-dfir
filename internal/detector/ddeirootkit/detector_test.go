@@ -1,6 +1,7 @@
 package ddeirootkit
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,7 +45,7 @@ func TestCleanHostNoPreload(t *testing.T) {
 
 func TestPreloadFamilyHash(t *testing.T) {
 	root := fixture(t, map[string]string{
-		"etc/ld.so.preload": "/usr/lib64/libnet.so\n",
+		"etc/ld.so.preload":   "/usr/lib64/libnet.so\n",
 		"usr/lib64/libnet.so": "placeholder", // hash won't match; use hook symbols below
 	})
 	withELF(t, func(path string) elfFacts {
@@ -75,8 +76,8 @@ func TestLegitLibnetDevelNotFlagged(t *testing.T) {
 // land in REVIEW, not INFECTED.
 func TestPreloadLegitLibraryIsReview(t *testing.T) {
 	root := fixture(t, map[string]string{
-		"etc/ld.so.preload":      "/usr/lib64/libesmtp.so",
-		"usr/lib64/libesmtp.so":  "legit helper",
+		"etc/ld.so.preload":     "/usr/lib64/libesmtp.so",
+		"usr/lib64/libesmtp.so": "legit helper",
 	})
 	withELF(t, func(path string) elfFacts {
 		return elfFacts{IsELF: true, DefinedHooks: 0, DefinedTotal: 25}
@@ -101,7 +102,7 @@ func TestPreloadBrokenEntryIsReview(t *testing.T) {
 // name, but the ELF defines the hook symbol set.
 func TestRenamedVariantStillFires(t *testing.T) {
 	root := fixture(t, map[string]string{
-		"etc/ld.so.preload":      "/usr/lib64/libsystemd_private.so",
+		"etc/ld.so.preload":               "/usr/lib64/libsystemd_private.so",
 		"usr/lib64/libsystemd_private.so": "renamed hook lib",
 	})
 	withELF(t, func(path string) elfFacts {
@@ -176,7 +177,7 @@ func TestExitCodes(t *testing.T) {
 
 func TestWriteLogCreatesFile(t *testing.T) {
 	root := fixture(t, map[string]string{
-		"etc/ld.so.preload": "/usr/lib64/libnet.so\n",
+		"etc/ld.so.preload":   "/usr/lib64/libnet.so\n",
 		"usr/lib64/libnet.so": "x",
 	})
 	withELF(t, func(path string) elfFacts {
@@ -202,4 +203,28 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// TestDetectOnlyFlowSmoke mirrors the exact sequence app.Run executes in
+// -detect-only mode against the real (host) filesystem, on any OS: it must
+// never error regardless of what exists, must produce a verdict, and must
+// write the log file.
+func TestDetectOnlyFlowSmoke(t *testing.T) {
+	rep := Run(Options{ScanProcMaps: true}) // Root "" => real filesystem
+	Print(rep, os.Stdout)
+	path, err := WriteLog(rep, t.TempDir())
+	if err != nil {
+		t.Fatalf("WriteLog failed: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("log missing: %v", err)
+	}
+	switch rep.Verdict {
+	case VerdictClean, VerdictReview, VerdictInfected:
+	default:
+		t.Fatalf("unexpected verdict %q", rep.Verdict)
+	}
+	if _, err := json.MarshalIndent(rep, "", "  "); err != nil {
+		t.Fatalf("report not JSON-serializable: %v", err)
+	}
 }

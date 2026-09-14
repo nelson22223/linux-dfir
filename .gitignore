@@ -50,3 +50,11 @@ coverage.out
 # Go local workspace/cache
 go.work
 internal/detector/ddeirootkit/testdata/
+_blob.json
+_commit.json
+_tree.json
+_release.json
+_tagobj.json
+_ref.json
+_upref.json
+_tagref.json
