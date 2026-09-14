@@ -13,5 +13,5 @@ func ctimeOf(path string) time.Time {
 		return time.Time{}
 	}
 	sec, nsec := st.Ctim.Sec, st.Ctim.Nsec
-	return time.Unix(sec, nsec)
+	return time.Unix(int64(sec), int64(nsec))
 }
