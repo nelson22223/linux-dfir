@@ -47,14 +47,20 @@ type Coverage struct {
 	Skipped   int  `json:"skipped"`
 }
 type Report struct {
-	Timestamp time.Time `json:"timestamp"`
-	Hostname  string    `json:"hostname,omitempty"`
-	Verdict   Verdict   `json:"verdict"`
-	Summary   string    `json:"summary,omitempty"`
-	Complete  bool      `json:"complete"`
-	Coverage  Coverage  `json:"coverage"`
-	Findings  []Finding `json:"findings"`
-	ProcHits  []ProcHit `json:"proc_hits,omitempty"`
+	SharedMemory []SharedMemoryObservation `json:"shared_memory,omitempty"`
+	Timestamp    time.Time                 `json:"timestamp"`
+	Hostname     string                    `json:"hostname,omitempty"`
+	Verdict      Verdict                   `json:"verdict"`
+	Summary      string                    `json:"summary,omitempty"`
+	Complete     bool                      `json:"complete"`
+	Coverage     Coverage                  `json:"coverage"`
+	Findings     []Finding                 `json:"findings"`
+	ProcHits     []ProcHit                 `json:"proc_hits,omitempty"`
+}
+type SharedMemoryObservation struct {
+	PID      int                  `json:"pid"`
+	Exe      string               `json:"exe"`
+	Mappings []MappingObservation `json:"mappings"`
 }
 type Options struct {
 	Root         string
@@ -98,7 +104,11 @@ type PAMObservation struct {
 	Resolution    string
 	CandidatePath string
 }
+type MissingPAMReference struct {
+	Config, Type, Control, Module string
+}
 type MappingObservation struct {
+	Kind, Device, Inode                  string
 	ObjectID, Address, Permissions, Path string
 	Deleted                              bool
 }
@@ -123,6 +133,7 @@ type Observations struct {
 	PreloadObjects []string
 	AuthPAMObjects []string
 	PAMAuth        []PAMObservation
+	MissingPAM     []MissingPAMReference
 	NetworkPeers   []NetworkObservation
 	Gaps           []string
 	Suspicious     []string
@@ -189,6 +200,16 @@ func Evaluate(o Observations) Report {
 		}
 	}
 	for _, p := range o.Processes {
+		var shared []MappingObservation
+		for _, m := range p.Mappings {
+			if m.Kind == "shared_anonymous" {
+				shared = append(shared, m)
+			}
+		}
+		if len(shared) > 0 {
+			r.SharedMemory = append(r.SharedMemory, SharedMemoryObservation{PID: p.PID, Exe: p.Exe, Mappings: shared})
+			add("shared_anonymous", "Kernel shared-anonymous mappings (not a safety verdict)", LevelInfo, fmt.Sprintf("pid=%d exe=%s regions=%d; file ELF inspection not applicable; RWX correlation retained", p.PID, p.Exe, len(shared)))
+		}
 		hit := exact[p.ExeObject]
 		if p.UID == 0 && p.PPID == 1 && (p.RWX || p.AnonymousRWX) && p.HasPTY {
 			daemonPayload = true
@@ -321,6 +342,9 @@ func Evaluate(o Observations) Report {
 	}
 	for _, g := range o.Gaps {
 		add("coverage_gap", "Required observation unavailable", LevelReview, g)
+	}
+	for _, f := range missingPAMFindings(o.MissingPAM) {
+		r.Findings = append(r.Findings, f)
 	}
 	if !r.Complete {
 		add("coverage_gap", "Coverage incomplete", LevelReview, "Root and live proc coverage without observation errors required")

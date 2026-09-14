@@ -169,12 +169,20 @@ func (c *collector) configs() {
 			}
 			token := fields[i]
 			if !filepath.IsAbs(token) {
+				before := len(c.o.MissingPAM)
 				c.pamCandidates(e.Name(), strings.Join(fields[1:i], " "), token)
+				for n := before; n < len(c.o.MissingPAM); n++ {
+					c.o.MissingPAM[n].Type = fields[0]
+				}
 				continue
 			}
 			paths := c.resolve(token, true)
 			if len(paths) == 0 {
 				c.gap(token, fmt.Errorf("unresolved PAM module"))
+				continue
+			}
+			if _, err := os.Lstat(paths[0]); os.IsNotExist(err) {
+				c.o.MissingPAM = append(c.o.MissingPAM, MissingPAMReference{Config: e.Name(), Type: fields[0], Control: strings.Join(fields[1:i], " "), Module: token})
 				continue
 			}
 			if id := c.object(paths, token, "pam"); id != "" {
@@ -359,6 +367,10 @@ func (c *collector) processes() {
 			}
 			identityFields := strings.Fields(line)
 			mapKey := identityFields[3] + ":" + identityFields[4]
+			if c.root == "/" && clean == "/dev/zero" && deleted && confirmedSharedZero(dir+"/map_files/"+address, perms, path, identityFields[3], identityFields[4]) {
+				p.Mappings = append(p.Mappings, MappingObservation{Address: address, Permissions: perms, Path: clean, Deleted: true, Kind: "shared_anonymous", Device: identityFields[3], Inode: identityFields[4]})
+				continue
+			}
 			if !candidate || seen[mapKey] {
 				continue
 			}

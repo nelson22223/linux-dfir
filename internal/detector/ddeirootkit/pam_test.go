@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -86,7 +87,7 @@ func TestPAMCandidateCollection(t *testing.T) {
 			}
 			o := Collect(context.Background(), opts(root))
 			r := Evaluate(o)
-			bad := mode == "copy" || mode == "damaged" || mode == "nonelf" || mode == "unknown" || mode == "missing" || mode == "brokenlink" || mode == "directory"
+			bad := mode == "copy" || mode == "damaged" || mode == "nonelf" || mode == "unknown" || mode == "brokenlink" || mode == "directory"
 			if bad {
 				if r.Complete || r.Coverage.Errors == 0 || r.Verdict != VerdictInconclusive {
 					t.Fatalf("%+v", r)
@@ -114,6 +115,41 @@ func TestPAMCandidateCollection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMissingPAMReferencesAreGroupedFacts(t *testing.T) {
+	c := newCollector(fixture(t, map[string]string{
+		"etc/pam.d/smartcard-auth":    "auth [success=done ignore=ignore default=die] pam_pkcs11.so\n",
+		"etc/pam.d/smartcard-auth-ac": "auth required pam_pkcs11.so\n",
+		"etc/pam.d/sshd.atuin":        "-auth optional pam_reauthorize.so prepare\n",
+		"etc/pam.d/absolute":          "auth required /missing/pam_test.so\n",
+	}))
+	c.configs()
+	if len(c.o.Gaps) != 0 || len(c.o.MissingPAM) != 4 {
+		t.Fatalf("%+v", c.o)
+	}
+	c.o.Coverage.Root, c.o.Coverage.Proc = true, true
+	r := Evaluate(c.o)
+	if !r.Complete || r.Verdict != VerdictClean || r.Coverage.Errors != 0 {
+		t.Fatalf("%+v", r)
+	}
+	if len(r.Findings) != 3 {
+		t.Fatalf("%+v", r.Findings)
+	}
+	text := Text(r)
+	for _, want := range []string{"smartcard-auth:", "smartcard-auth-ac:", "-auth optional", "/missing/pam_test.so"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %s: %s", want, text)
+		}
+	}
+	c.o.Gaps = append(c.o.Gaps, "required observation: permission denied")
+	if r := Evaluate(c.o); r.Complete || r.Verdict != VerdictInconclusive {
+		t.Fatalf("%+v", r)
+	}
+	c.o.Objects = append(c.o.Objects, ObjectObservation{SHA256: SeptemberLibrarySHA256})
+	if r := Evaluate(c.o); r.Verdict != VerdictInfected {
+		t.Fatalf("%+v", r)
 	}
 }
 
