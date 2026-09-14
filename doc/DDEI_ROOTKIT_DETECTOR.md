@@ -1,6 +1,6 @@
 # DDEI Rootkit 专用检测器
 
-本分支默认仅运行 DDEI 专用检测，在控制台用英文显示结果，不创建文件。专用检测日志和报告也为英文；原始证据不翻译。显式 --collect 才启动原 DFIR 采集。范围是案例中的用户态预加载、PAM 认证链和伪装服务行为，不是通用内核 rootkit 扫描器。
+本分支默认仅运行 DDEI 专用检测，控制台固定显示两行：Execution: SUCCESS/FAILED 和 Verdict: CLEAN/INFECTED/INCONCLUSIVE，不创建文件。不展开 INFO、REVIEW、命中详情或其他摘要。专用检测日志和报告仍保留完整英文依据；原始证据不翻译。显式 --collect 才启动原 DFIR 采集。范围是案例中的用户态预加载、PAM 认证链和伪装服务行为，不是通用内核 rootkit 扫描器。
 
 ## 使用和输出
 
@@ -11,13 +11,16 @@ sudo ./ddei-rootkit-detector-linux-amd64
 sudo ./ddei-rootkit-detector-linux-amd64 --collect
 # 仅检测并额外保存一份人读报告
 sudo ./ddei-rootkit-detector-linux-amd64 --detector-log-dir ./logs
+# 完整英文检测回显，含 INFO/REVIEW，不创建文件
+sudo ./ddei-rootkit-detector-linux-amd64 --verbose
 ```
 
 ARM64 使用对应 arm64 文件。需要 root 和可读的 /proc；读取不足不能作完整 CLEAN 结论。
 
 | 查看内容 | 位置 |
 |---|---|
-| 判定、依据、覆盖和执行状态 | 控制台；具体执行错误在标准错误 |
+| 执行状态与判定 | DDEI 控制台固定两行 Execution 和 Verdict |
+| 完整依据与覆盖 | 显式保存的检测日志或采集包内报告；执行失败必须显示 FAILED 并返回非零退出码 |
 | 专用人读日志（仅显式指定非空 --detector-log-dir） | 指定目录 ddei_rootkit_check_YYYYMMDDThhmmssZ.log，英文，0600 权限，同秒自动换名 |
 | 包内人读检测报告 | dfir_*/legacy/ddei_rootkit/report.txt |
 | 包内检测 JSON | dfir_*/legacy/ddei_rootkit/report.json |
@@ -31,11 +34,18 @@ ARM64 使用对应 arm64 文件。需要 root 和可读的 /proc；读取不足�
 | 调用 | 每次新增工具产物 |
 |---|---|
 | 无参数，或 --detect-only | 0 个文件，只有控制台输出 |
+| --verbose | 0 个文件，展开完整检测报告及最终结果 |
 | --detector-log-dir ./logs | 1 个检测 .log；首次可能创建 logs 目录 |
 | --collect | 1 个采集目录（内含 AI、人读及索引等多个文件）+ 1 个 .tar.gz；无独立检测 .log |
 | --collect --detector-log-dir ./logs | 上述采集目录和压缩包 + 1 个独立 .log |
 
-重复默认运行不累积文件。显式保存日志每次保留新文件，不覆盖旧证据，也不自动删除历史文件；显式采集保留目录和压缩包两份形态。采集内部文件数量随主机内容变化，不能固定为几个。操作系统自己的 sudo/audit 等日志仍可能记录工具运行，不属于工具主动生成文件。
+重复默认运行不累积文件。--detector-log-dir 和 --collect 模式控制台也固定两行，保存的文件仍包含完整详情。兼容的 --no-detect 保留原只采集输出；--help 仍显示帮助。显式保存日志每次保留新文件，不覆盖旧证据，也不自动删除历史文件；显式采集保留目录和压缩包两份形态。采集内部文件数量随主机内容变化，不能固定为几个。操作系统自己的 sudo/audit 等日志仍可能记录工具运行，不属于工具主动生成文件。
+
+Execution 表示本次检测/显式采集是否完成，不等同主机是否感染。覆盖不足或执行失败显示 FAILED；完整执行即使发现感染也可以显示 SUCCESS。感染证据不会因为其他检查缺口消失，因此 FAILED + INFECTED 是有效组合。INCONCLUSIVE 不能当作 CLEAN。
+
+--verbose 是显式调试开关，会恢复 INFO、REVIEW、命中详情和覆盖提示；不改变检测规则、退出码或默认文件数量。默认模式仍固定两行。
+
+PAM 相对模块名按实际 ELF 位数、机器类型和字节序区分候选，同一文件别名去重。正常 32/64 位共存不再直接报错；同架构歧义、缺失、不可读或损坏仍记录缺口。候选文件不等于已加载模块，加载关联仍需进程映射及文件身份依据。不按进程名或模块名加入白名单。
 
 --collect 默认 ddei profile 为 host/system/process/network/persistence/logs 六模块，不是 deep。默认检测模式不读取 profile。采集模式中仅默认 profiles/ddei.yaml 缺失才内置兜底；显式错误目录、损坏配置和权限错误会失败。其他 profile 仍需配置文件。detect-only 与 collect/no-detect 互斥；no-detect 显式保留只采集的兼容行为。扫描和清理参数必须显式启用采集，不能在默认检测模式中静默忽略。
 

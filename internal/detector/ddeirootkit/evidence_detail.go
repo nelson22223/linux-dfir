@@ -18,7 +18,11 @@ func pamDetail(o Observations) string {
 	for _, p := range o.PAMAuth {
 		c := controls[p.Config+"\x00"+p.ObjectID]
 		if c["[success=1 default=ignore]"] && c["[success=done default=ignore]"] {
-			details = append(details, fmt.Sprintf("PAM service=%s module=%s object=%s auth control=%s", p.Config, p.Module, p.ObjectID, p.Control))
+			provenance := "explicit configuration or legacy observation"
+			if p.Candidate {
+				provenance = "search candidate path=" + p.CandidatePath + " resolution=" + p.Resolution + " (not proof of loading)"
+			}
+			details = append(details, fmt.Sprintf("PAM service=%s module=%s object=%s auth control=%s provenance=%s", p.Config, p.Module, p.ObjectID, p.Control, provenance))
 		}
 	}
 	return strings.Join(details, "; ")

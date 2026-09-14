@@ -34,6 +34,11 @@ var detectorExitCode int
 
 var errorExitCode = 2
 
+var errorReported bool
+
+// ErrorReported reports whether main should suppress additional error details.
+func ErrorReported() bool { return errorReported }
+
 // ErrorExitCode preserves the legacy failure contract when detection is disabled.
 func ErrorExitCode() int { return errorExitCode }
 
@@ -60,6 +65,7 @@ type Config struct {
 	DetectOnly         bool
 	Collect            bool
 	NoDetect           bool
+	Verbose            bool
 	DetectorLog        string
 	ProfileDirExplicit bool
 }
@@ -67,7 +73,12 @@ type Config struct {
 func Run(ctx context.Context, args []string) (runErr error) {
 	detectorExitCode = 0
 	errorExitCode = 2
+	errorReported = false
 	lastRun = runStatus{Detection: "not_started", Collection: "not_started"}
+	legacyMode := false
+	verbose := false
+	verdict := ddeirootkit.VerdictInconclusive
+	complete := false
 	defer func() {
 		execution := "completed"
 		if errors.Is(runErr, flag.ErrHelp) {
@@ -80,10 +91,24 @@ func Run(ctx context.Context, args []string) (runErr error) {
 				lastRun.Collection = "failed"
 			}
 		}
-		fmt.Printf("Execution: %s; detection=%s; collection=%s; exit_code=%d\n", execution, lastRun.Detection, lastRun.Collection, detectorExitCode)
+		if legacyMode {
+			fmt.Printf("Execution: %s; detection=%s; collection=%s; exit_code=%d\n", execution, lastRun.Detection, lastRun.Collection, detectorExitCode)
+		} else {
+			status := "SUCCESS"
+			if runErr != nil || !complete {
+				status = "FAILED"
+			}
+			if runErr != nil && verdict != ddeirootkit.VerdictInfected {
+				verdict = ddeirootkit.VerdictInconclusive
+			}
+			fmt.Printf("Execution: %s\nVerdict: %s\n", status, verdict)
+			errorReported = runErr != nil && !verbose
+		}
 	}()
 
 	cfg, err := parseArgs(args)
+	legacyMode = cfg.NoDetect
+	verbose = cfg.Verbose
 	if cfg.NoDetect {
 		errorExitCode = 1
 	}
@@ -108,21 +133,27 @@ func Run(ctx context.Context, args []string) (runErr error) {
 			ScanProcMaps: true,
 		})
 		detectorReport = &rep
-		lastRun.Detection = string(rep.Verdict)
-		detectorExitCode = ddeirootkit.ExitCode(rep.Verdict)
+		complete = rep.Complete
+		verdict = ddeirootkit.VerdictInconclusive
+		if rep.Verdict == ddeirootkit.VerdictInfected || (rep.Verdict == ddeirootkit.VerdictClean && rep.Complete) {
+			verdict = rep.Verdict
+		}
+		lastRun.Detection = string(verdict)
+		detectorExitCode = ddeirootkit.ExitCode(verdict)
 		if !rep.Complete {
 			if rep.Verdict != ddeirootkit.VerdictInfected {
 				detectorExitCode = 2
 			}
 			lastRun.Detection += " (incomplete coverage)"
 		}
-		ddeirootkit.Print(rep, os.Stdout)
+		if cfg.Verbose {
+			ddeirootkit.Print(rep, os.Stdout)
+		}
 		if cfg.DetectorLog != "" {
-			logPath, logErr := ddeirootkit.WriteLog(rep, cfg.DetectorLog)
+			_, logErr := ddeirootkit.WriteLog(rep, cfg.DetectorLog)
 			if logErr != nil {
 				return fmt.Errorf("detector log write failed: %w", logErr)
 			}
-			fmt.Printf("Detector log saved: %s\n", logPath)
 		}
 		if err := runCtx.Err(); err != nil {
 			return fmt.Errorf("detector execution interrupted: %w", err)
@@ -275,14 +306,16 @@ func Run(ctx context.Context, args []string) (runErr error) {
 	if err := out.Finalize(defaultMode, profileDef.Name, finalCollectors, time.Now().UTC()); err != nil {
 		return err
 	}
-	if err := writeArchive(cfg.OutputDir, sess.SessionID); err != nil {
+	if err := writeArchive(cfg.OutputDir, sess.SessionID, cfg.NoDetect); err != nil {
 		return err
 	}
 
 	lastRun.Collection = "completed"
-	fmt.Printf("Collection and archive completed\n")
-	fmt.Printf("session=%s profile=%s collectors=%s output_mode=%s output=%s scan=%s clean=%s\n",
-		sess.SessionID, profileDef.Name, strings.Join(finalCollectors, ","), defaultMode, cfg.OutputDir, cfg.Scan, cfg.CleanMode)
+	if cfg.NoDetect {
+		fmt.Printf("Collection and archive completed\n")
+		fmt.Printf("session=%s profile=%s collectors=%s output_mode=%s output=%s scan=%s clean=%s\n",
+			sess.SessionID, profileDef.Name, strings.Join(finalCollectors, ","), defaultMode, cfg.OutputDir, cfg.Scan, cfg.CleanMode)
+	}
 	return nil
 }
 
@@ -310,6 +343,7 @@ func parseArgs(args []string) (Config, error) {
 	fs.StringVar(&cfg.Timeout, "timeout", cfg.Timeout, "optional overall collection timeout, disabled when omitted")
 	fs.BoolVar(&cfg.DetectOnly, "detect-only", false, "run only the DDEI rootkit detector (no collection/archive)")
 	fs.BoolVar(&cfg.Collect, "collect", false, "enable collection and archive after detection")
+	fs.BoolVar(&cfg.Verbose, "verbose", false, "print the full detector report before the execution and verdict summary")
 	fs.BoolVar(&cfg.NoDetect, "no-detect", false, "skip the DDEI rootkit detector (original collection behaviour)")
 	fs.StringVar(&cfg.DetectorLog, "detector-log-dir", "", "directory for an optional detector log file (empty: no log file)")
 
@@ -346,7 +380,9 @@ func loadProfileOrDefault(cfg Config) (profile.Definition, error) {
 	if _, statErr := os.Lstat(filepath.Join(cfg.ProfileDir, cfg.Profile+".yaml")); !errors.Is(statErr, os.ErrNotExist) {
 		return profile.Definition{}, err
 	}
-	fmt.Fprintf(os.Stderr, "Default profile missing; using built-in %s profile\n", defaultProfile)
+	if cfg.NoDetect {
+		fmt.Fprintf(os.Stderr, "Default profile missing; using built-in %s profile\n", defaultProfile)
+	}
 	return profile.Definition{
 		Name:        defaultProfile,
 		Description: "built-in DDEI triage profile (detector output plus supporting artifacts)",
@@ -409,7 +445,7 @@ func optionalTimeoutContext(ctx context.Context, value string) (context.Context,
 	return runCtx, cancel, timeout
 }
 
-func writeArchive(outputDir, sessionID string) error {
+func writeArchive(outputDir, sessionID string, verbose bool) error {
 	outputAbs, err := filepath.Abs(outputDir)
 	if err != nil {
 		return err
@@ -423,7 +459,9 @@ func writeArchive(outputDir, sessionID string) error {
 	if err := archive.WriteSummary(summaryPath, summary); err != nil {
 		return err
 	}
-	fmt.Printf("archive=%s sha256=%s session=%s\n", archivePath, summary.Archive.SHA256, sessionID)
+	if verbose {
+		fmt.Printf("archive=%s sha256=%s session=%s\n", archivePath, summary.Archive.SHA256, sessionID)
+	}
 	return nil
 }
 

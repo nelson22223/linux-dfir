@@ -81,17 +81,22 @@ var knownLibSHA256s = map[string]string{SeptemberLibrarySHA256: "September case"
 // IDs identify successfully read objects, not names. Replay callers must retain
 // evidence provenance and provide observations from one host and collection.
 type ObjectObservation struct {
-	ID, Path, SHA256, MD5, Role string
-	ELF, Static                 bool
-	ValidELF                    bool
-	ELFError                    string
-	Hooks                       int
-	HookNames, HookCategories   []string
-	ELFType                     string
-	Size                        int64
+	ID, Path, SHA256, MD5, Role   string
+	ELF, Static                   bool
+	ValidELF                      bool
+	ELFError                      string
+	Hooks                         int
+	HookNames, HookCategories     []string
+	ELFType                       string
+	ELFClass, ELFMachine, ELFData string
+	Size                          int64
 }
 type PAMObservation struct {
 	Config, Control, Module, ObjectID string
+	// Candidate means search-path evidence, not a proven configured or loaded file.
+	Candidate     bool
+	Resolution    string
+	CandidatePath string
 }
 type MappingObservation struct {
 	ObjectID, Address, Permissions, Path string
@@ -214,6 +219,18 @@ func Evaluate(o Observations) Report {
 		}
 	}
 	activePreload, broadPreload := false, false
+	activeLoaders := map[string]bool{}
+	caseLoaders := map[string]bool{}
+	for id, x := range objects {
+		if x.SHA256 == AugustLoaderSHA256 && (configured[id] || mapped[id]) {
+			caseLoaders[id] = true
+		}
+	}
+	for _, p := range o.PAMAuth {
+		if p.Candidate && mapped[p.ObjectID] && objects[p.ObjectID].SHA256 == AugustPAMSHA256 && compatiblePAMLoader(objects[p.ObjectID], objects, caseLoaders) {
+			secondary = true
+		}
+	}
 	for id := range configured {
 		if !mapped[id] {
 			continue
@@ -223,6 +240,7 @@ func Evaluate(o Observations) Report {
 			continue
 		}
 		activePreload = true
+		activeLoaders[id] = true
 		names, categories := map[string]bool{}, map[string]bool{}
 		for _, name := range x.HookNames {
 			if hookSymbols[name] {
@@ -237,6 +255,7 @@ func Evaluate(o Observations) Report {
 		}
 	}
 	pamControls := map[string]map[string]bool{}
+	pamResolvedControls := map[string]map[string]bool{}
 	for _, p := range o.PAMAuth {
 		if p.Config == "" || p.ObjectID == "" {
 			continue
@@ -247,15 +266,23 @@ func Evaluate(o Observations) Report {
 		key := p.Config + "\x00" + p.ObjectID
 		if pamControls[key] == nil {
 			pamControls[key] = map[string]bool{}
+			pamResolvedControls[key] = map[string]bool{}
 		}
-		pamControls[key][strings.Join(strings.Fields(p.Control), " ")] = true
+		control := strings.Join(strings.Fields(p.Control), " ")
+		pamControls[key][control] = true
+		if !p.Candidate {
+			pamResolvedControls[key][control] = true
+		}
 	}
 	pamPair, validPAMPair := false, false
 	for key, controls := range pamControls {
 		if controls["[success=1 default=ignore]"] && controls["[success=done default=ignore]"] {
 			pamPair = true
 			x := objects[strings.SplitN(key, "\x00", 2)[1]]
-			if x.ValidELF && x.ELF && x.ELFType == "ET_DYN" {
+			resolved := pamResolvedControls[key]
+			resolvedPair := resolved["[success=1 default=ignore]"] && resolved["[success=done default=ignore]"]
+			eligible := resolvedPair || mapped[x.ID] && compatiblePAMLoader(x, objects, activeLoaders)
+			if eligible && x.ValidELF && x.ELF && x.ELFType == "ET_DYN" {
 				validPAMPair = true
 			}
 		}
@@ -287,7 +314,7 @@ func Evaluate(o Observations) Report {
 		add("pam_control_pair", "Paired PAM authentication control jumps require verification", LevelReview, pamDetail(o))
 	}
 	if loader && secondary {
-		add("aug_correlated", "Correlated August case components", LevelCompromised, "Exact case loader configured or mapped, with exact case PAM configured for auth or exact case xinetd running")
+		add("aug_correlated", "Correlated August case components", LevelCompromised, "Exact case loader configured or mapped, with exact case PAM explicitly configured for auth or architecture-compatible PAM candidate mapped, or exact case xinetd running")
 	}
 	for _, s := range o.Suspicious {
 		add("anomaly", "Unresolved observation", LevelReview, s)

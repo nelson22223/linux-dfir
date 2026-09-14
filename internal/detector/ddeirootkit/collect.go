@@ -168,6 +168,10 @@ func (c *collector) configs() {
 				continue
 			}
 			token := fields[i]
+			if !filepath.IsAbs(token) {
+				c.pamCandidates(e.Name(), strings.Join(fields[1:i], " "), token)
+				continue
+			}
 			paths := c.resolve(token, true)
 			if len(paths) == 0 {
 				c.gap(token, fmt.Errorf("unresolved PAM module"))

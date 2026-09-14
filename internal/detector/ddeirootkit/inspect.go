@@ -19,10 +19,11 @@ const maxObject = int64(64 << 20)
 const maxText = int64(8 << 20)
 
 type elfFacts struct {
-	IsELF, HasInterpreter      bool
-	DefinedHooks, DefinedTotal int
-	HookNames, HookCategories  []string
-	ELFType                    string
+	IsELF, HasInterpreter         bool
+	DefinedHooks, DefinedTotal    int
+	HookNames, HookCategories     []string
+	ELFType                       string
+	ELFClass, ELFMachine, ELFData string
 }
 
 var hookSymbols = map[string]bool{"stat": true, "stat64": true, "lstat": true, "lstat64": true, "xstat": true, "fxstat": true, "lxstat": true, "__lxstat": true, "statx": true, "fstatat": true, "newfstatat": true, "readdir": true, "readdir64": true, "fopen": true, "fopen64": true, "open": true, "open64": true, "access": true, "unlink": true, "unlinkat": true}
@@ -202,6 +203,7 @@ func parseELF(raw io.ReaderAt, size int64) (elfFacts, error) {
 	defer f.Close()
 	facts.IsELF = true
 	facts.ELFType = f.Type.String()
+	facts.ELFClass, facts.ELFMachine, facts.ELFData = f.Class.String(), f.Machine.String(), f.Data.String()
 	for _, p := range f.Progs {
 		if p.Off > uint64(size) || p.Filesz > uint64(size)-p.Off {
 			return facts, fmt.Errorf("ELF segment outside file")
@@ -332,6 +334,7 @@ func inspectObjectFD(ctx context.Context, f *os.File) (ObjectObservation, error)
 	o.HookNames = facts.HookNames
 	o.HookCategories = facts.HookCategories
 	o.ELFType = facts.ELFType
+	o.ELFClass, o.ELFMachine, o.ELFData = facts.ELFClass, facts.ELFMachine, facts.ELFData
 	return o, err
 }
 func hashFile(path string) (string, string) {

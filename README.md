@@ -196,11 +196,12 @@ Pending Linux VM validation:
 
 ## DDEI 专用检测
 
-默认仅运行精确 IOC 与行为关联检测，结果显示在控制台，不创建日志、采集目录或压缩包。
+默认仅运行精确 IOC 与行为关联检测，控制台固定两行 Execution: SUCCESS/FAILED 和 Verdict: CLEAN/INFECTED/INCONCLUSIVE，不创建日志、采集目录或压缩包。INFO 和详细依据不在默认控制台展开，显式保存的报告仍保留完整内容。
 --collect 才用精简 ddei profile 采集并打包；--detector-log-dir 才额外保存一份独立检测日志。采集时 legacy/ddei_rootkit/report.txt 提供人读结果，AI JSONL 继续只保存采集事实。
 
 ```sh
 ./dfir-collector                 # quick detection, console only, no files
+./dfir-collector --verbose       # full detector details, no files
 ./dfir-collector --collect       # detection + focused collection + tar.gz
 ./dfir-collector --detector-log-dir ./logs # detection + one report file
 ./dfir-collector -no-detect -profile deep   # original full collection

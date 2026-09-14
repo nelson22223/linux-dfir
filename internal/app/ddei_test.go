@@ -57,6 +57,7 @@ func TestDDEIDefaultConsoleOnly(t *testing.T) {
 		{"--profile-dir", "missing", "--profile", "missing", "--output", "missing/output"},
 		{"--profile-dir", dir, "--output", dir, "--detector-log-dir="},
 		{"--detect-only", "--output", ""},
+		{"--verbose"},
 	} {
 		if err := Run(context.Background(), args); err != nil || ExitCode() != 0 || lastRun.Collection != "not_started" {
 			t.Fatalf("args=%v err=%v code=%d status=%+v", args, err, ExitCode(), lastRun)
@@ -66,18 +67,23 @@ func TestDDEIDefaultConsoleOnly(t *testing.T) {
 			t.Fatalf("unexpected files: %v err=%v", entries, err)
 		}
 	}
-	if calls != 5 {
+	if calls != 6 {
 		t.Fatalf("detector calls=%d", calls)
 	}
 }
 
 func TestDDEIExplicitLogOnly(t *testing.T) {
 	dir := isolatedWorkingDir(t)
+	rep := ddeirootkit.Report{Verdict: ddeirootkit.VerdictClean, Complete: true}
 	fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
-		return ddeirootkit.Report{Verdict: ddeirootkit.VerdictClean, Complete: true}
+		return rep
 	})
-	if err := Run(context.Background(), []string{"--detector-log-dir", dir}); err != nil {
-		t.Fatal(err)
+	var runErr error
+	stdout := captureCLIOutput(t, func() {
+		runErr = Run(context.Background(), []string{"--verbose", "--detector-log-dir", dir})
+	})
+	if runErr != nil || stdout != ddeirootkit.Text(rep)+"Execution: SUCCESS\nVerdict: CLEAN\n" {
+		t.Fatalf("stdout=%q err=%v", stdout, runErr)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 || entries[0].IsDir() || !strings.HasSuffix(entries[0].Name(), ".log") {
@@ -85,6 +91,10 @@ func TestDDEIExplicitLogOnly(t *testing.T) {
 	}
 	if lastRun.Collection != "not_started" {
 		t.Fatalf("unexpected collection: %+v", lastRun)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil || string(body) != ddeirootkit.Text(rep) {
+		t.Fatalf("saved report=%q err=%v", body, err)
 	}
 }
 
@@ -216,27 +226,62 @@ func TestDDEIDetectionOutcomes(t *testing.T) {
 		verdict  string
 		complete bool
 		code     int
+		want     string
 	}{
-		{"CLEAN", true, 0}, {"INFECTED", true, 3}, {"INCONCLUSIVE", false, 2}, {"REVIEW", true, 2}, {"CLEAN", false, 2}, {"INFECTED", false, 3},
+		{"CLEAN", true, 0, "SUCCESS\nVerdict: CLEAN\n"},
+		{"INFECTED", true, 3, "SUCCESS\nVerdict: INFECTED\n"},
+		{"INCONCLUSIVE", true, 2, "SUCCESS\nVerdict: INCONCLUSIVE\n"},
+		{"INCONCLUSIVE", false, 2, "FAILED\nVerdict: INCONCLUSIVE\n"},
+		{"REVIEW", true, 2, "SUCCESS\nVerdict: INCONCLUSIVE\n"},
+		{"REVIEW", false, 2, "FAILED\nVerdict: INCONCLUSIVE\n"},
+		{"CLEAN", false, 2, "FAILED\nVerdict: INCONCLUSIVE\n"},
+		{"INFECTED", false, 3, "FAILED\nVerdict: INFECTED\n"},
+		{"unknown", true, 2, "SUCCESS\nVerdict: INCONCLUSIVE\n"},
+		{"", false, 2, "FAILED\nVerdict: INCONCLUSIVE\n"},
 	} {
-		t.Run(tc.verdict+string(rune('0'+tc.code)), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s/%t", tc.verdict, tc.complete), func(t *testing.T) {
+			rep := ddeirootkit.Report{Verdict: ddeirootkit.Verdict(tc.verdict), Complete: tc.complete,
+				Summary: "full report summary",
+				Findings: []ddeirootkit.Finding{
+					{Level: ddeirootkit.LevelInfo, Title: "info finding", Detail: "info details"},
+					{Level: ddeirootkit.LevelReview, Title: "review finding", Detail: "review details"},
+				}}
 			fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
-				return ddeirootkit.Report{Verdict: ddeirootkit.Verdict(tc.verdict), Complete: tc.complete}
+				return rep
 			})
-			var err error
-			stdout := captureCLIOutput(t, func() {
-				err = Run(context.Background(), nil)
-			})
-			if err != nil || ExitCode() != tc.code {
-				t.Fatalf("err=%v code=%d", err, ExitCode())
+			logDir := t.TempDir()
+			profileDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(profileDir, "fixture.yaml"), []byte("collectors: [session]\n"), 0600); err != nil {
+				t.Fatal(err)
 			}
-			detection := tc.verdict
-			if !tc.complete {
-				detection += " (incomplete coverage)"
+			outputDir := filepath.Join(profileDir, "out")
+			for _, args := range [][]string{nil, {"--detect-only"}, {"--verbose=false"}, {"--verbose"}, {"--detector-log-dir", logDir},
+				{"--verbose", "--collect", "--profile-dir", profileDir, "--profile", "fixture", "--output", outputDir},
+				{"--collect", "--profile-dir", profileDir, "--profile", "fixture", "--output", outputDir}} {
+				var err error
+				stdout := captureCLIOutput(t, func() { err = Run(context.Background(), args) })
+				if err != nil || ExitCode() != tc.code || ErrorReported() {
+					t.Fatalf("args=%v err=%v code=%d reported=%t", args, err, ExitCode(), ErrorReported())
+				}
+				want := "Execution: " + tc.want
+				if len(args) > 0 && args[0] == "--verbose" {
+					want = ddeirootkit.Text(rep) + want
+				}
+				if stdout != want {
+					t.Fatalf("args=%v stdout=%q, want %q", args, stdout, want)
+				}
 			}
-			want := fmt.Sprintf("Execution: completed; detection=%s; collection=not_started; exit_code=%d\n", detection, tc.code)
-			if !strings.HasSuffix(stdout, want) {
-				t.Fatalf("stdout=%q, want suffix %q", stdout, want)
+			entries, err := os.ReadDir(logDir)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("logs=%v err=%v", entries, err)
+			}
+			body, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+			if err != nil || string(body) != ddeirootkit.Text(rep) {
+				t.Fatalf("full report changed: body=%q err=%v", body, err)
+			}
+			body, err = os.ReadFile(filepath.Join(outputDir, "legacy", "ddei_rootkit", "report.txt"))
+			if err != nil || string(body) != ddeirootkit.Text(rep) {
+				t.Fatalf("collection report changed: body=%q err=%v", body, err)
 			}
 		})
 	}
@@ -294,6 +339,110 @@ func TestDDEILogFailure(t *testing.T) {
 	err := Run(context.Background(), []string{"--detect-only", "--detector-log-dir", path})
 	if err == nil || !strings.Contains(err.Error(), "detector log write failed") || ExitCode() != 2 {
 		t.Fatalf("err=%v code=%d", err, ExitCode())
+	}
+}
+
+func TestDDEICompactExecutionFailures(t *testing.T) {
+	for _, verdict := range []ddeirootkit.Verdict{ddeirootkit.VerdictClean, ddeirootkit.VerdictInfected, ddeirootkit.VerdictReview} {
+		for _, failure := range []string{"log", "cancel", "collection"} {
+			t.Run(string(verdict)+"/"+failure, func(t *testing.T) {
+				fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
+					return ddeirootkit.Report{Verdict: verdict, Complete: true}
+				})
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				args := []string{"--detect-only"}
+				switch failure {
+				case "log":
+					path := filepath.Join(t.TempDir(), "file")
+					if err := os.WriteFile(path, nil, 0600); err != nil {
+						t.Fatal(err)
+					}
+					args = append(args, "--detector-log-dir", path)
+				case "cancel":
+					cancel()
+				case "collection":
+					args = []string{"--collect", "--profile-dir", filepath.Join(t.TempDir(), "missing")}
+				}
+				var err error
+				stdout := captureCLIOutput(t, func() { err = Run(ctx, args) })
+				want := "Execution: FAILED\nVerdict: INCONCLUSIVE\n"
+				if verdict == ddeirootkit.VerdictInfected {
+					want = "Execution: FAILED\nVerdict: INFECTED\n"
+				}
+				if stdout != want || err == nil || ExitCode() != 2 || !ErrorReported() {
+					t.Fatalf("stdout=%q err=%v code=%d reported=%t", stdout, err, ExitCode(), ErrorReported())
+				}
+				if failure == "cancel" && !errors.Is(err, context.Canceled) {
+					t.Fatalf("lost cause: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestDDEICompactValidationFailures(t *testing.T) {
+	fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
+		t.Fatal("detector called for invalid invocation")
+		return ddeirootkit.Report{}
+	})
+	for _, args := range [][]string{{"--unknown"}, {"--timeout", "bad"}, {"--detect-only", "--collect"}, {"--collect", "--output", ""}} {
+		var err error
+		stdout := captureCLIOutput(t, func() { err = Run(context.Background(), args) })
+		if stdout != "Execution: FAILED\nVerdict: INCONCLUSIVE\n" || err == nil || ExitCode() != 2 || !ErrorReported() {
+			t.Fatalf("args=%v stdout=%q err=%v code=%d", args, stdout, err, ExitCode())
+		}
+	}
+}
+
+func TestDDEIVerboseExecutionFailures(t *testing.T) {
+	for _, failure := range []string{"log", "cancel", "collection", "validation", "parse"} {
+		t.Run(failure, func(t *testing.T) {
+			rep := ddeirootkit.Report{Verdict: ddeirootkit.VerdictReview, Complete: false,
+				Findings: []ddeirootkit.Finding{
+					{Level: ddeirootkit.LevelInfo, Title: "coverage gap", Detail: "proc unavailable"},
+					{Level: ddeirootkit.LevelReview, Title: "review evidence"},
+				}}
+			calls := 0
+			fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
+				calls++
+				return rep
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			args := []string{"--verbose"}
+			want := ddeirootkit.Text(rep) + "Execution: FAILED\nVerdict: INCONCLUSIVE\n"
+			switch failure {
+			case "log":
+				path := filepath.Join(t.TempDir(), "file")
+				if err := os.WriteFile(path, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				args = append(args, "--detector-log-dir", path)
+			case "cancel":
+				cancel()
+			case "collection":
+				args = append(args, "--collect", "--profile-dir", filepath.Join(t.TempDir(), "missing"))
+			case "validation":
+				args = append(args, "--timeout", "bad")
+			case "parse":
+				args = append(args, "--unknown")
+			}
+			if failure == "validation" || failure == "parse" {
+				want = "Execution: FAILED\nVerdict: INCONCLUSIVE\n"
+			}
+			var err error
+			stdout := captureCLIOutput(t, func() { err = Run(ctx, args) })
+			if err == nil || ErrorReported() || ExitCode() != 2 || stdout != want {
+				t.Fatalf("stdout=%q err=%v reported=%t code=%d", stdout, err, ErrorReported(), ExitCode())
+			}
+			if (failure == "validation" || failure == "parse") && calls != 0 {
+				t.Fatal("detector ran before validation")
+			}
+			if failure == "cancel" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("lost cause: %v", err)
+			}
+		})
 	}
 }
 
@@ -408,7 +557,13 @@ func TestDDEIArchiveHumanReportAndFactsOnlyAI(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "output")
-	err := Run(context.Background(), []string{"--collect", "--profile-dir", dir, "--profile", "fixture", "--output", out})
+	var err error
+	stdout := captureCLIOutput(t, func() {
+		err = Run(context.Background(), []string{"--collect", "--profile-dir", dir, "--profile", "fixture", "--output", out})
+	})
+	if stdout != "Execution: SUCCESS\nVerdict: INFECTED\n" {
+		t.Fatalf("stdout=%q", stdout)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
