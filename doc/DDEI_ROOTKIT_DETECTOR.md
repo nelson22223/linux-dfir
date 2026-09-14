@@ -1,16 +1,16 @@
 # DDEI Rootkit 专用检测器
 
-本分支在原 DFIR 采集之前运行 DDEI 专用检测。范围是案例中的用户态预加载、PAM 认证链和伪装服务行为，不是通用内核 rootkit 扫描器。
+本分支默认仅运行 DDEI 专用检测，在控制台用英文显示结果，不创建文件。专用检测日志和报告也为英文；原始证据不翻译。显式 --collect 才启动原 DFIR 采集。范围是案例中的用户态预加载、PAM 认证链和伪装服务行为，不是通用内核 rootkit 扫描器。
 
 ## 使用和输出
 
 ```sh
-# 仅检测
-sudo ./ddei-rootkit-detector-linux-amd64 -detect-only
-# 默认检测、六模块采集、双输出、自动打包
+# 默认仅检测，零工具输出文件
 sudo ./ddei-rootkit-detector-linux-amd64
-# 可选显式超时和日志位置
-sudo ./ddei-rootkit-detector-linux-amd64 -detect-only -timeout 2m -detector-log-dir ./logs
+# 检测、六模块采集、双输出、自动打包
+sudo ./ddei-rootkit-detector-linux-amd64 --collect
+# 仅检测并额外保存一份人读报告
+sudo ./ddei-rootkit-detector-linux-amd64 --detector-log-dir ./logs
 ```
 
 ARM64 使用对应 arm64 文件。需要 root 和可读的 /proc；读取不足不能作完整 CLEAN 结论。
@@ -18,7 +18,7 @@ ARM64 使用对应 arm64 文件。需要 root 和可读的 /proc；读取不足�
 | 查看内容 | 位置 |
 |---|---|
 | 判定、依据、覆盖和执行状态 | 控制台；具体执行错误在标准错误 |
-| 专用人读日志 | 二进制目录 ddei_rootkit_check_YYYYMMDDThhmmssZ.log，中文，0600 权限，同秒自动换名 |
+| 专用人读日志（仅显式指定非空 --detector-log-dir） | 指定目录 ddei_rootkit_check_YYYYMMDDThhmmssZ.log，英文，0600 权限，同秒自动换名 |
 | 包内人读检测报告 | dfir_*/legacy/ddei_rootkit/report.txt |
 | 包内检测 JSON | dfir_*/legacy/ddei_rootkit/report.json |
 | 原有人读采集 | dfir_*/legacy/ |
@@ -26,9 +26,18 @@ ARM64 使用对应 arm64 文件。需要 root 和可读的 /proc；读取不足�
 | 索引及完整性 | ai/manifest.json、ai/artifact_index.json |
 | 最终压缩包 | 运行时当前目录 dfir_年月日时分秒.tar.gz |
 
-检测日志用 UTC；采集目录时间用主机本地时区。二进制目录和工作目录可以不同。仅检测不创建采集目录或压缩包。
+包内文件仅在 --collect（或兼容的 --no-detect 采集）时产生；跳过检测不生成检测报告。检测日志用 UTC；采集目录时间用主机本地时区。
 
-默认 ddei profile 为 host/system/process/network/persistence/logs 六模块，不是 deep。仅默认 profiles/ddei.yaml 缺失才内置兜底；显式错误目录、损坏配置和权限错误会失败。其他 profile 仍需配置文件。detect-only 与 no-detect 互斥。
+| 调用 | 每次新增工具产物 |
+|---|---|
+| 无参数，或 --detect-only | 0 个文件，只有控制台输出 |
+| --detector-log-dir ./logs | 1 个检测 .log；首次可能创建 logs 目录 |
+| --collect | 1 个采集目录（内含 AI、人读及索引等多个文件）+ 1 个 .tar.gz；无独立检测 .log |
+| --collect --detector-log-dir ./logs | 上述采集目录和压缩包 + 1 个独立 .log |
+
+重复默认运行不累积文件。显式保存日志每次保留新文件，不覆盖旧证据，也不自动删除历史文件；显式采集保留目录和压缩包两份形态。采集内部文件数量随主机内容变化，不能固定为几个。操作系统自己的 sudo/audit 等日志仍可能记录工具运行，不属于工具主动生成文件。
+
+--collect 默认 ddei profile 为 host/system/process/network/persistence/logs 六模块，不是 deep。默认检测模式不读取 profile。采集模式中仅默认 profiles/ddei.yaml 缺失才内置兜底；显式错误目录、损坏配置和权限错误会失败。其他 profile 仍需配置文件。detect-only 与 collect/no-detect 互斥；no-detect 显式保留只采集的兼容行为。扫描和清理参数必须显式启用采集，不能在默认检测模式中静默忽略。
 
 ## 判定契约
 
@@ -75,7 +84,7 @@ no-detect 的普通采集错误保留原退出码 1。检测阳性可以与 comp
 - 有界文件读取和 ELF 预验证；畸形输入返回检查缺口，不能 panic 或静默当作文件不存在。
 - 区分权限拒绝、文件缺失、进程退出和 PID 生命周期变化。映射关联绑定实际读取对象。
 - 显式 timeout 对检测和后续采集传递 context；归档沿用通用实现，不宣称严格端到端硬时限。未指定时不启用总超时；profile 历史 10m 字段不是自动上限。
-- 默认完整采集仍继承原采集器的部分外部命令观察。本轮仅修 DDEI 引入的问题，未修改通用模块。静态检测器不能保证动态子程序同样可信。
+- 显式完整采集仍继承原采集器的部分外部命令观察。本轮仅修 DDEI 引入的问题，未修改通用模块。静态检测器不能保证动态子程序同样可信。
 - 日志解析上限等通用采集限制仍在 AI errors 流；归档成功不意味着采集无缺口。
 - 固定大小、时间、规则数量不能证明所有变种已覆盖；被修改内核也不在本工具可信性保证之内。
 

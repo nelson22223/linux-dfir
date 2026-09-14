@@ -58,6 +58,7 @@ type Config struct {
 	Scan               string
 	Timeout            string
 	DetectOnly         bool
+	Collect            bool
 	NoDetect           bool
 	DetectorLog        string
 	ProfileDirExplicit bool
@@ -66,20 +67,20 @@ type Config struct {
 func Run(ctx context.Context, args []string) (runErr error) {
 	detectorExitCode = 0
 	errorExitCode = 2
-	lastRun = runStatus{Detection: "未执行", Collection: "未执行"}
+	lastRun = runStatus{Detection: "not_started", Collection: "not_started"}
 	defer func() {
-		execution := "完成"
+		execution := "completed"
 		if errors.Is(runErr, flag.ErrHelp) {
 			return
 		}
 		if runErr != nil {
-			execution = "失败"
+			execution = "failed"
 			detectorExitCode = ErrorExitCode()
-			if lastRun.Collection == "进行中" {
-				lastRun.Collection = "失败"
+			if lastRun.Collection == "running" {
+				lastRun.Collection = "failed"
 			}
 		}
-		fmt.Printf("执行状态：%s；检测=%s；采集=%s；退出码=%d\n", execution, lastRun.Detection, lastRun.Collection, detectorExitCode)
+		fmt.Printf("Execution: %s; detection=%s; collection=%s; exit_code=%d\n", execution, lastRun.Detection, lastRun.Collection, detectorExitCode)
 	}()
 
 	cfg, err := parseArgs(args)
@@ -113,19 +114,20 @@ func Run(ctx context.Context, args []string) (runErr error) {
 			if rep.Verdict != ddeirootkit.VerdictInfected {
 				detectorExitCode = 2
 			}
-			lastRun.Detection += "（覆盖不完整）"
+			lastRun.Detection += " (incomplete coverage)"
 		}
 		ddeirootkit.Print(rep, os.Stdout)
-		logPath, logErr := ddeirootkit.WriteLog(rep, cfg.DetectorLog)
-		if logErr != nil {
-			return fmt.Errorf("检测日志写入失败: %w", logErr)
-		} else {
-			fmt.Printf("检测日志已保存：%s\n", logPath)
+		if cfg.DetectorLog != "" {
+			logPath, logErr := ddeirootkit.WriteLog(rep, cfg.DetectorLog)
+			if logErr != nil {
+				return fmt.Errorf("detector log write failed: %w", logErr)
+			}
+			fmt.Printf("Detector log saved: %s\n", logPath)
 		}
 		if err := runCtx.Err(); err != nil {
-			return fmt.Errorf("检测执行中断: %w", err)
+			return fmt.Errorf("detector execution interrupted: %w", err)
 		}
-		if cfg.DetectOnly {
+		if !cfg.Collect {
 			return nil
 		}
 	}
@@ -135,7 +137,7 @@ func Run(ctx context.Context, args []string) (runErr error) {
 		return err
 	}
 	logs.Configure(logs.Options{JournalMaxLines: profileDef.Limits.JournalMaxLines})
-	lastRun.Collection = "进行中"
+	lastRun.Collection = "running"
 
 	sess, err := session.New("", time.Now().UTC())
 	if err != nil {
@@ -277,8 +279,8 @@ func Run(ctx context.Context, args []string) (runErr error) {
 		return err
 	}
 
-	lastRun.Collection = "已完成"
-	fmt.Printf("采集及归档已完成\n")
+	lastRun.Collection = "completed"
+	fmt.Printf("Collection and archive completed\n")
 	fmt.Printf("session=%s profile=%s collectors=%s output_mode=%s output=%s scan=%s clean=%s\n",
 		sess.SessionID, profileDef.Name, strings.Join(finalCollectors, ","), defaultMode, cfg.OutputDir, cfg.Scan, cfg.CleanMode)
 	return nil
@@ -307,8 +309,9 @@ func parseArgs(args []string) (Config, error) {
 	fs.StringVar(&cfg.Scan, "scan", cfg.Scan, "scanner: none, tmbrfix, yara, osquery")
 	fs.StringVar(&cfg.Timeout, "timeout", cfg.Timeout, "optional overall collection timeout, disabled when omitted")
 	fs.BoolVar(&cfg.DetectOnly, "detect-only", false, "run only the DDEI rootkit detector (no collection/archive)")
+	fs.BoolVar(&cfg.Collect, "collect", false, "enable collection and archive after detection")
 	fs.BoolVar(&cfg.NoDetect, "no-detect", false, "skip the DDEI rootkit detector (original collection behaviour)")
-	fs.StringVar(&cfg.DetectorLog, "detector-log-dir", "", "directory for the detector log file (default: directory of the executable)")
+	fs.StringVar(&cfg.DetectorLog, "detector-log-dir", "", "directory for an optional detector log file (empty: no log file)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -343,7 +346,7 @@ func loadProfileOrDefault(cfg Config) (profile.Definition, error) {
 	if _, statErr := os.Lstat(filepath.Join(cfg.ProfileDir, cfg.Profile+".yaml")); !errors.Is(statErr, os.ErrNotExist) {
 		return profile.Definition{}, err
 	}
-	fmt.Fprintf(os.Stderr, "默认配置文件缺失，使用内置 %s 配置\n", defaultProfile)
+	fmt.Fprintf(os.Stderr, "Default profile missing; using built-in %s profile\n", defaultProfile)
 	return profile.Definition{
 		Name:        defaultProfile,
 		Description: "built-in DDEI triage profile (detector output plus supporting artifacts)",
@@ -358,9 +361,12 @@ func loadProfileOrDefault(cfg Config) (profile.Definition, error) {
 
 func validateConfig(cfg Config) error {
 	if cfg.DetectOnly && cfg.NoDetect {
-		return errors.New("--detect-only 与 --no-detect 不能同时使用")
+		return errors.New("--detect-only and --no-detect cannot be used together")
 	}
-	if cfg.OutputDir == "" {
+	if cfg.DetectOnly && cfg.Collect {
+		return errors.New("--detect-only and --collect cannot be used together")
+	}
+	if (cfg.Collect || cfg.NoDetect) && cfg.OutputDir == "" {
 		return errors.New("output directory is required")
 	}
 
@@ -369,6 +375,9 @@ func validateConfig(cfg Config) error {
 	}
 	if !oneOf(cfg.CleanMode, "disabled", "confirm", "force") {
 		return fmt.Errorf("unsupported clean mode: %s", cfg.CleanMode)
+	}
+	if !cfg.Collect && !cfg.NoDetect && (!oneOf(cfg.Scan, "none") || !oneOf(cfg.CleanMode, "disabled")) {
+		return errors.New("--scan and --clean require --collect or --no-detect")
 	}
 	if cfg.Timeout != "" {
 		if timeout, err := time.ParseDuration(cfg.Timeout); err != nil || timeout <= 0 {

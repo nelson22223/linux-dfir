@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 func TestReportBehaviorEvidencePreserved(t *testing.T) {
@@ -71,7 +72,7 @@ func TestReportLogExclusivePrivate(t *testing.T) {
 	if err != nil || info.Mode().Perm()&0027 != 0 {
 		t.Fatalf("directory mode: %v %v", info, err)
 	}
-	if !strings.Contains(string(before), "覆盖不足") || !strings.Contains(string(before), "INCONCLUSIVE") {
+	if !strings.Contains(string(before), "coverage insufficient") || !strings.Contains(string(before), "INCONCLUSIVE") {
 		t.Fatal(string(before))
 	}
 }
@@ -89,19 +90,32 @@ func TestReportLogFailure(t *testing.T) {
 func TestReportTextCompletion(t *testing.T) {
 	got := Text(Report{Verdict: VerdictClean, Complete: true,
 		Coverage: Coverage{Root: true, Proc: true, Processes: 123, Objects: 456}})
-	if !strings.Contains(got, "已完成") || !strings.Contains(got, "不代表主机整体安全") {
+	if !strings.Contains(got, "checks completed") || !strings.Contains(got, "not a guarantee of overall host safety") {
 		t.Fatal(got)
 	}
-	for _, want := range []string{"未发现需标记的指标", "进程=123", "对象=456"} {
+	for _, want := range []string{"No indicators flagged", "processes=123", "objects=456"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q: %s", want, got)
 		}
 	}
-	if strings.Contains(got, "无检查记录") {
+	if strings.Contains(got, "No checks recorded") {
 		t.Fatal(got)
 	}
 	got = Text(Report{Verdict: Verdict("unexpected")})
-	if !strings.Contains(got, "判定：unexpected") || strings.Contains(got, "判定：CLEAN") {
+	if !strings.Contains(got, "Verdict: unexpected") || strings.Contains(got, "Verdict: CLEAN") {
 		t.Fatal(got)
+	}
+}
+
+func TestReportEnglishVerdicts(t *testing.T) {
+	for _, verdict := range []Verdict{VerdictClean, VerdictInfected, VerdictInconclusive} {
+		rep := Report{Verdict: verdict, Complete: verdict != VerdictInconclusive}
+		text := Text(rep)
+		if !strings.Contains(text, "Verdict: "+string(verdict)) {
+			t.Fatalf("missing verdict: %s", text)
+		}
+		if strings.ContainsFunc(text, func(r rune) bool { return unicode.Is(unicode.Han, r) }) {
+			t.Fatalf("non-English generated report: %s", text)
+		}
 	}
 }

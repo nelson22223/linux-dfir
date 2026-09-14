@@ -43,8 +43,8 @@ func networkFindings(o Observations) []Finding {
 		if active && len(peer.PIDs) > 0 {
 			level = LevelCompromised
 		}
-		findings = append(findings, Finding{ID: "confirmed_network_peer", Title: "已确认案例网络 IOC", Level: level,
-			Detail: fmt.Sprintf("remote=%s:%d protocol=%s state=%s pids=%v inode=%s namespace=%s source=%s；仅依据实际 socket，不依据文本出现", peer.RemoteIP, peer.Port, peer.Protocol, peer.State, peer.PIDs, peer.Inode, peer.Namespace, peer.Source)})
+		findings = append(findings, Finding{ID: "confirmed_network_peer", Title: "Confirmed case network IOC", Level: level,
+			Detail: fmt.Sprintf("remote=%s:%d protocol=%s state=%s pids=%v inode=%s namespace=%s source=%s; based on an observed socket, not a text occurrence", peer.RemoteIP, peer.Port, peer.Protocol, peer.State, peer.PIDs, peer.Inode, peer.Namespace, peer.Source)})
 	}
 	return findings
 }

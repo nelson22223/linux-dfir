@@ -144,7 +144,7 @@ func Evaluate(o Observations) Report {
 	for _, x := range o.Objects {
 		objects[x.ID] = x
 		if x.ELFError != "" {
-			add("object_error", "对象 ELF 验证失败", LevelReview, x.Path+": "+x.ELFError)
+			add("object_error", "Object ELF validation failed", LevelReview, x.Path+": "+x.ELFError)
 			recorded := false
 			for _, gap := range o.Gaps {
 				if gap == x.Path+": "+x.ELFError {
@@ -261,9 +261,9 @@ func Evaluate(o Observations) Report {
 		}
 	}
 	if activePreload && validPAMPair && daemonPayload {
-		add("behavior_preload_pam_daemon", "预加载、PAM 认证控制和守护进程行为关联命中", LevelCompromised, behaviorDetail(o, true))
+		add("behavior_preload_pam_daemon", "Correlated preload, PAM authentication controls and daemon behavior", LevelCompromised, behaviorDetail(o, true))
 	} else if broadPreload && daemonPayload {
-		add("behavior_hooks_daemon", "广泛预加载拦截与守护进程行为关联命中", LevelCompromised, behaviorDetail(o, false))
+		add("behavior_hooks_daemon", "Correlated broad preload hooks and daemon behavior", LevelCompromised, behaviorDetail(o, false))
 	}
 	if daemonPayload && (activePreload && validPAMPair || broadPreload) {
 		seen := map[int]bool{}
@@ -284,7 +284,7 @@ func Evaluate(o Observations) Report {
 		}
 	}
 	if pamPair {
-		add("pam_control_pair", "PAM 认证模块存在成对跳转控制，需核实", LevelReview, pamDetail(o))
+		add("pam_control_pair", "Paired PAM authentication control jumps require verification", LevelReview, pamDetail(o))
 	}
 	if loader && secondary {
 		add("aug_correlated", "Correlated August case components", LevelCompromised, "Exact case loader configured or mapped, with exact case PAM configured for auth or exact case xinetd running")

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,6 +21,129 @@ func fakeDetection(t *testing.T, fn func(context.Context, ddeirootkit.Options) d
 	old := runDetector
 	runDetector = fn
 	t.Cleanup(func() { runDetector = old })
+}
+
+func isolatedWorkingDir(t *testing.T) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Error(err)
+		}
+	})
+	return dir
+}
+
+func TestDDEIDefaultConsoleOnly(t *testing.T) {
+	dir := isolatedWorkingDir(t)
+	calls := 0
+	fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
+		calls++
+		return ddeirootkit.Report{Verdict: ddeirootkit.VerdictClean, Complete: true}
+	})
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+	for _, args := range [][]string{
+		nil, nil,
+		{"--profile-dir", "missing", "--profile", "missing", "--output", "missing/output"},
+		{"--profile-dir", dir, "--output", dir, "--detector-log-dir="},
+		{"--detect-only", "--output", ""},
+	} {
+		if err := Run(context.Background(), args); err != nil || ExitCode() != 0 || lastRun.Collection != "not_started" {
+			t.Fatalf("args=%v err=%v code=%d status=%+v", args, err, ExitCode(), lastRun)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("unexpected files: %v err=%v", entries, err)
+		}
+	}
+	if calls != 5 {
+		t.Fatalf("detector calls=%d", calls)
+	}
+}
+
+func TestDDEIExplicitLogOnly(t *testing.T) {
+	dir := isolatedWorkingDir(t)
+	fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
+		return ddeirootkit.Report{Verdict: ddeirootkit.VerdictClean, Complete: true}
+	})
+	if err := Run(context.Background(), []string{"--detector-log-dir", dir}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].IsDir() || !strings.HasSuffix(entries[0].Name(), ".log") {
+		t.Fatalf("expected exactly one log: %v err=%v", entries, err)
+	}
+	if lastRun.Collection != "not_started" {
+		t.Fatalf("unexpected collection: %+v", lastRun)
+	}
+}
+
+func TestDDEICollectionIntentValidation(t *testing.T) {
+	fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
+		t.Fatal("detector called for conflicting intent")
+		return ddeirootkit.Report{}
+	})
+	for _, args := range [][]string{
+		{"--detect-only", "--collect"},
+		{"--scan", "yara"}, {"--scan", "tmbrfix"}, {"--scan", "osquery"},
+		{"--clean", "confirm"}, {"--clean", "force"},
+		{"--detect-only", "--scan", "yara"},
+		{"--collect=false", "--clean", "force"},
+	} {
+		if err := Run(context.Background(), args); err == nil || ExitCode() != 2 {
+			t.Fatalf("args=%v err=%v code=%d", args, err, ExitCode())
+		}
+	}
+	for _, args := range [][]string{
+		{"--collect", "--scan", "yara", "--clean", "confirm"},
+		{"--no-detect", "--scan", "tmbrfix", "--clean", "force"},
+		{"--scan", "NONE", "--clean", "DISABLED"},
+	} {
+		cfg, err := parseArgs(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateConfig(cfg); err != nil {
+			t.Fatalf("args=%v err=%v", args, err)
+		}
+	}
+}
+
+func TestDDEIDefaultCancellationNoFiles(t *testing.T) {
+	dir := isolatedWorkingDir(t)
+	for _, during := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before", true: "during"}[during], func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if !during {
+				cancel()
+			}
+			fakeDetection(t, func(got context.Context, _ ddeirootkit.Options) ddeirootkit.Report {
+				cancel()
+				if !errors.Is(got.Err(), context.Canceled) {
+					t.Fatal("parent cancellation lost")
+				}
+				return ddeirootkit.Report{Verdict: ddeirootkit.VerdictInfected, Complete: false}
+			})
+			if err := Run(ctx, nil); !errors.Is(err, context.Canceled) || ExitCode() != 2 || lastRun.Collection != "not_started" {
+				t.Fatalf("err=%v code=%d status=%+v", err, ExitCode(), lastRun)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("unexpected files: %v err=%v", entries, err)
+			}
+		})
+	}
 }
 
 func TestDDEIConflictingFlags(t *testing.T) {
@@ -82,7 +206,7 @@ func TestDDEINoDetectResetsExitCode(t *testing.T) {
 	}
 	detectorExitCode = 3
 	err := Run(context.Background(), []string{"--no-detect", "--profile-dir", dir, "--profile", "fixture", "--output", filepath.Join(dir, "out")})
-	if err != nil || ExitCode() != 0 || lastRun.Detection != "未执行" {
+	if err != nil || ExitCode() != 0 || lastRun.Detection != "not_started" {
 		t.Fatalf("err=%v code=%d status=%+v", err, ExitCode(), lastRun)
 	}
 }
@@ -99,11 +223,63 @@ func TestDDEIDetectionOutcomes(t *testing.T) {
 			fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
 				return ddeirootkit.Report{Verdict: ddeirootkit.Verdict(tc.verdict), Complete: tc.complete}
 			})
-			err := Run(context.Background(), []string{"--detect-only", "--detector-log-dir", t.TempDir()})
+			var err error
+			stdout := captureCLIOutput(t, func() {
+				err = Run(context.Background(), nil)
+			})
 			if err != nil || ExitCode() != tc.code {
 				t.Fatalf("err=%v code=%d", err, ExitCode())
 			}
+			detection := tc.verdict
+			if !tc.complete {
+				detection += " (incomplete coverage)"
+			}
+			want := fmt.Sprintf("Execution: completed; detection=%s; collection=not_started; exit_code=%d\n", detection, tc.code)
+			if !strings.HasSuffix(stdout, want) {
+				t.Fatalf("stdout=%q, want suffix %q", stdout, want)
+			}
 		})
+	}
+}
+
+func captureCLIOutput(t *testing.T, run func()) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	old := os.Stdout
+	os.Stdout = f
+	defer func() { os.Stdout = old }()
+	run()
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestCLICollectionFailureStatus(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "fixture.yaml"), []byte("collectors: [session]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	blocked := filepath.Join(dir, "file")
+	if err := os.WriteFile(blocked, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	stdout := captureCLIOutput(t, func() {
+		err := Run(context.Background(), []string{"--no-detect", "--profile-dir", dir, "--profile", "fixture", "--output", filepath.Join(blocked, "out")})
+		if err == nil {
+			t.Fatal("expected collection failure")
+		}
+	})
+	if want := "Execution: failed; detection=not_started; collection=failed; exit_code=1\n"; !strings.HasSuffix(stdout, want) {
+		t.Fatalf("stdout=%q, want suffix %q", stdout, want)
 	}
 }
 
@@ -116,7 +292,7 @@ func TestDDEILogFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := Run(context.Background(), []string{"--detect-only", "--detector-log-dir", path})
-	if err == nil || !strings.Contains(err.Error(), "日志") || ExitCode() != 2 {
+	if err == nil || !strings.Contains(err.Error(), "detector log write failed") || ExitCode() != 2 {
 		t.Fatalf("err=%v code=%d", err, ExitCode())
 	}
 }
@@ -216,7 +392,7 @@ func TestDDEICollectionFailurePreservesVerdict(t *testing.T) {
 	fakeDetection(t, func(context.Context, ddeirootkit.Options) ddeirootkit.Report {
 		return ddeirootkit.Report{Verdict: ddeirootkit.VerdictInfected, Complete: true}
 	})
-	err := Run(context.Background(), []string{"--profile-dir", filepath.Join(t.TempDir(), "missing"), "--detector-log-dir", t.TempDir()})
+	err := Run(context.Background(), []string{"--collect", "--profile-dir", filepath.Join(t.TempDir(), "missing"), "--detector-log-dir", t.TempDir()})
 	if err == nil || ExitCode() != 2 || lastRun.Detection != "INFECTED" {
 		t.Fatalf("err=%v code=%d status=%+v", err, ExitCode(), lastRun)
 	}
@@ -232,12 +408,16 @@ func TestDDEIArchiveHumanReportAndFactsOnlyAI(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "output")
-	err := Run(context.Background(), []string{"--profile-dir", dir, "--profile", "fixture", "--output", out, "--detector-log-dir", dir})
+	err := Run(context.Background(), []string{"--collect", "--profile-dir", dir, "--profile", "fixture", "--output", out})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ExitCode() != 3 || lastRun.Collection != "已完成" {
+	if ExitCode() != 3 || lastRun.Collection != "completed" {
 		t.Fatalf("code=%d status=%+v", ExitCode(), lastRun)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 3 {
+		t.Fatalf("expected only profile, output and archive; entries=%v err=%v", entries, err)
 	}
 	for _, p := range []string{"legacy/ddei_rootkit/report.json", "legacy/ddei_rootkit/report.txt"} {
 		b, err := os.ReadFile(filepath.Join(out, p))

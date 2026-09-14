@@ -57,6 +57,6 @@ func behaviorDetail(o Observations, withPAM bool) string {
 			parts = append(parts, fmt.Sprintf("daemon pid=%d exe=%s uid=%d ppid=%d RWX=true regions=%v PTY=true fd_targets=%v", p.PID, p.Exe, p.UID, p.PPID, p.RWXRegions, p.PTYPaths))
 		}
 	}
-	parts = append(parts, "高特异性行为关联；不代表绝对无误报，也不单独证明攻击者归属")
+	parts = append(parts, "High-specificity behavioral correlation; not a guarantee against false positives or proof of actor attribution")
 	return strings.Join(parts, "; ")
 }

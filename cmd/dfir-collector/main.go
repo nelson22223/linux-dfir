@@ -15,7 +15,7 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
-		fmt.Fprintf(os.Stderr, "执行失败：%v\n", err)
+		fmt.Fprintf(os.Stderr, "Execution failed: %v\n", err)
 		os.Exit(app.ErrorExitCode())
 	}
 	// Propagate the DDEI rootkit detector verdict as the process exit code

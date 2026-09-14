@@ -1,6 +1,6 @@
 # Linux DFIR Collector
 
-本工作分支包含 DDEI 专用检测增强。DDEI 默认先检测，再采集六模块；用法、判定规则和输出位置见 [DDEI 中文说明](doc/DDEI_ROOTKIT_DETECTOR.md)。下文通用采集器说明不覆盖专用检测的判定契约。
+本工作分支包含 DDEI 专用检测增强。DDEI 默认仅检测并输出控制台，不创建文件；显式 --collect 才采集六模块。用法、判定规则和输出位置见 [DDEI 中文说明](doc/DDEI_ROOTKIT_DETECTOR.md)。下文通用采集器说明不覆盖专用检测的判定契约。
 
 Go-based one-shot Linux incident response collector inspired by the original ATTK collection surface. It produces two parallel outputs:
 
@@ -196,12 +196,13 @@ Pending Linux VM validation:
 
 ## DDEI 专用检测
 
-默认运行精确 IOC 与行为关联检测，再用精简 ddei profile 采集并打包。
-控制台、专用日志及 legacy/ddei_rootkit/report.txt 提供人读结果，AI JSONL 继续只保存采集事实。
+默认仅运行精确 IOC 与行为关联检测，结果显示在控制台，不创建日志、采集目录或压缩包。
+--collect 才用精简 ddei profile 采集并打包；--detector-log-dir 才额外保存一份独立检测日志。采集时 legacy/ddei_rootkit/report.txt 提供人读结果，AI JSONL 继续只保存采集事实。
 
 ```sh
-./dfir-collector                 # detect (verdict + log) + focused collection + tar.gz
-./dfir-collector -detect-only    # fast verdict only
+./dfir-collector                 # quick detection, console only, no files
+./dfir-collector --collect       # detection + focused collection + tar.gz
+./dfir-collector --detector-log-dir ./logs # detection + one report file
 ./dfir-collector -no-detect -profile deep   # original full collection
 ```
 
