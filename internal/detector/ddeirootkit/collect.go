@@ -12,11 +12,12 @@ import (
 )
 
 type collector struct {
-	ctx        context.Context
-	root       string
-	o          Observations
-	cache      map[string]string
-	identities map[string]string
+	ctx           context.Context
+	root          string
+	o             Observations
+	cache         map[string]string
+	identities    map[string]string
+	mappingSource string
 }
 
 func (c *collector) path(s string) string    { return filepath.Join(c.root, s) }
@@ -35,24 +36,44 @@ func (c *collector) object(paths []string, display, role string) string {
 	return c.objectMapped(paths, display, role, "", "")
 }
 func (c *collector) objectMapped(paths []string, display, role, device, inode string) string {
+	return c.objectMappedWithMatcher(paths, display, role, device, inode, matchesMappingInfo)
+}
+
+// The matcher seam lets tests model older layered-filesystem inode views while
+// still verifying real procfs handles. Production always uses matchesMappingInfo.
+func (c *collector) objectMappedWithMatcher(paths []string, display, role, device, inode string, matches func(os.FileInfo, string, string) bool) string {
 	var last error
+	var attempts []string
+	c.mappingSource = ""
 	for _, path := range paths {
 		f, err := openRegular(path)
 		if err != nil {
 			last = err
+			attempts = append(attempts, path+": "+err.Error())
 			continue
 		}
 		info, err := f.Stat()
 		if err != nil {
 			f.Close()
 			last = err
+			attempts = append(attempts, path+": "+err.Error())
 			continue
 		}
-		if inode != "" && !matchesMappingInfo(info, device, inode) {
-			f.Close()
-			last = fmt.Errorf("mapped device/inode mismatch")
-			continue
+		if inode != "" && !matches(info, device, inode) {
+			last = fmt.Errorf("mapped device/inode mismatch: maps=%s inode=%s opened=%s", device, inode, mappingStatDescription(info))
+			if c.root != "/" {
+				f.Close()
+				attempts = append(attempts, path+": "+last.Error())
+				continue
+			}
+			if err := verifyMappedHandle(c.ctx, path, display, device, inode, info); err != nil {
+				f.Close()
+				attempts = append(attempts, path+": "+last.Error()+"; "+err.Error())
+				continue
+			}
+			c.o.MappingViews = append(c.o.MappingViews, MappingViewObservation{Source: path, Path: display, MapsDevice: device, MapsInode: inode, OpenedIdentity: mappingStatDescription(info)})
 		}
+		c.mappingSource = path
 		key := identityInfo(info, path)
 		if id := c.identities[key]; id != "" {
 			f.Close()
@@ -62,6 +83,7 @@ func (c *collector) objectMapped(paths []string, display, role, device, inode st
 		f.Close()
 		if x.SHA256 != "" && x.ID != key {
 			last = fmt.Errorf("object identity changed during inspection")
+			attempts = append(attempts, path+": "+last.Error())
 			continue
 		}
 		// A valid full hash remains useful even when ELF metadata is malformed.
@@ -78,9 +100,16 @@ func (c *collector) objectMapped(paths []string, display, role, device, inode st
 			return x.ID
 		}
 		last = err
+		if err != nil {
+			attempts = append(attempts, path+": "+err.Error())
+		}
 	}
 	if last != nil {
-		c.gap(display, last)
+		if inode != "" && len(attempts) > 0 {
+			c.gap(display, fmt.Errorf("mapped object unavailable: %s", strings.Join(attempts, "; ")))
+		} else {
+			c.gap(display, last)
+		}
 	}
 	return ""
 }
@@ -375,9 +404,6 @@ func (c *collector) processes() {
 				continue
 			}
 			paths := []string{dir + "/map_files/" + address, dir + "/root" + clean}
-			if !deleted {
-				paths = []string{dir + "/root" + clean, dir + "/map_files/" + address}
-			}
 			// Fixture roots do not have proc root links. Live scans never substitute the
 			// scanner's namespace for a process namespace.
 			if c.root != "/" && !deleted {
@@ -389,9 +415,11 @@ func (c *collector) processes() {
 				seen[mapKey] = true
 				delete(failures, mapKey)
 				p.MappedObjects = append(p.MappedObjects, id)
-				p.Mappings = append(p.Mappings, MappingObservation{ObjectID: id, Address: address, Permissions: perms, Path: clean, Deleted: deleted})
+				p.Mappings = append(p.Mappings, MappingObservation{ObjectID: id, Address: address, Permissions: perms, Path: clean, Deleted: deleted, Device: identityFields[3], Inode: identityFields[4], Source: c.mappingSource})
 			} else {
-				failures[mapKey] = append(failures[mapKey], c.o.Gaps[beforeGaps:]...)
+				if _, exists := failures[mapKey]; !exists {
+					failures[mapKey] = append([]string(nil), c.o.Gaps[beforeGaps:]...)
+				}
 				c.o.Gaps = c.o.Gaps[:beforeGaps]
 			}
 		}

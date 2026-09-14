@@ -1,6 +1,7 @@
 package ddeirootkit
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -50,16 +51,74 @@ func networkFindings(o Observations) []Finding {
 }
 
 func (c *collector) network() {
-	c.networkWithReadlink(os.Readlink)
+	c.networkWithRetry(func() []string { return c.networkAttempt(os.Readlink) })
+}
+
+// Only snapshot churn is recoverable by a later complete scan. All other gaps
+// and all peer evidence stay attached to the collector across attempts.
+func (c *collector) networkWithRetry(attempt func() []string) {
+	var pending []string
+	defer func() {
+		c.o.Gaps = append(c.o.Gaps, pending...)
+		seen := make(map[string]bool)
+		var peers []NetworkObservation
+		for _, peer := range c.o.NetworkPeers {
+			peer.PIDs = append([]int(nil), peer.PIDs...)
+			sort.Ints(peer.PIDs)
+			ids := peer.PIDs[:0]
+			for _, pid := range peer.PIDs {
+				if len(ids) == 0 || ids[len(ids)-1] != pid {
+					ids = append(ids, pid)
+				}
+			}
+			peer.PIDs = ids
+			// This fixed, JSON-safe struct includes source, namespace and owners;
+			// never union ownership from independent observations.
+			key, _ := json.Marshal(peer)
+			if !seen[string(key)] {
+				seen[string(key)] = true
+				peers = append(peers, peer)
+			}
+		}
+		c.o.NetworkPeers = peers
+	}()
+	for i := 0; i < 3; i++ {
+		if err := c.ctx.Err(); err != nil {
+			c.gap("network scan", err)
+			return
+		}
+		gapCount := len(c.o.Gaps)
+		churn := attempt()
+		if err := c.ctx.Err(); err != nil {
+			pending = append(pending, churn...)
+			c.gap("network scan", err)
+			return
+		}
+		// A scan reporting a coverage failure cannot supersede an earlier
+		// snapshot, even when it returned no churn (for example an early abort).
+		if len(c.o.Gaps) != gapCount {
+			pending = append(pending, churn...)
+		} else {
+			pending = churn
+		}
+		if len(churn) == 0 {
+			return
+		}
+	}
 }
 
 // The readlink seam permits deterministic namespace-transition tests.
 func (c *collector) networkWithReadlink(readlink func(string) (string, error)) {
+	churn := c.networkAttempt(readlink)
+	c.o.Gaps = append(c.o.Gaps, churn...)
+}
+
+func (c *collector) networkAttempt(readlink func(string) (string, error)) []string {
 	pids := c.networkProcesses()
 	selfNS, err := readlink(c.path("/proc/self/ns/net"))
 	if err != nil {
 		c.gap("/proc/self/ns/net", err)
-		return
+		return nil
 	}
 	namespaces := map[string]string{selfNS: c.path("/proc/net")}
 	namespaceLinks := map[string]string{selfNS: c.path("/proc/self/ns/net")}
@@ -68,7 +127,7 @@ func (c *collector) networkWithReadlink(readlink func(string) (string, error)) {
 	for pid := range pids {
 		if err := c.ctx.Err(); err != nil {
 			c.gap("network namespace scan", err)
-			return
+			return nil
 		}
 		dir := c.path(fmt.Sprintf("/proc/%d", pid))
 		ns, err := readlink(dir + "/ns/net")
@@ -105,6 +164,10 @@ func (c *collector) networkWithReadlink(readlink func(string) (string, error)) {
 		if pid, ok := representatives[ns]; ok {
 			dir := c.path(fmt.Sprintf("/proc/%d", pid))
 			if current, err := c.networkIdentity(dir); err != nil || current != pids[pid] {
+				if err != nil && c.ctx.Err() != nil {
+					c.gap(dir, err)
+					return false
+				}
 				c.gap(dir, fmt.Errorf("process changed %s", stage))
 				invalid[ns] = true
 				return false
@@ -113,12 +176,30 @@ func (c *collector) networkWithReadlink(readlink func(string) (string, error)) {
 		return true
 	}
 	var peers []NetworkObservation
+	validated := map[string]bool{}
+	published := false
+	defer func() {
+		if published {
+			return
+		}
+		// Early exits retain only table-validated sockets. Ownership is not
+		// attached until the complete owner snapshot has been validated.
+		for _, peer := range peers {
+			if validated[peer.Namespace] && !invalid[peer.Namespace] {
+				c.o.NetworkPeers = append(c.o.NetworkPeers, peer)
+			}
+		}
+	}()
 	keys := make([]string, 0, len(namespaces))
 	for ns := range namespaces {
 		keys = append(keys, ns)
 	}
 	sort.Strings(keys)
 	for _, ns := range keys {
+		if err := c.ctx.Err(); err != nil {
+			c.gap("network socket table scan", err)
+			return nil
+		}
 		if !checkRepresentative(ns, "before socket tables") {
 			continue
 		}
@@ -149,17 +230,16 @@ func (c *collector) networkWithReadlink(readlink func(string) (string, error)) {
 				}
 			}
 		}
-		checkRepresentative(ns, "after socket tables")
+		validated[ns] = checkRepresentative(ns, "after socket tables")
 	}
 	if len(peers) == 0 {
-		c.checkNetworkSnapshot(pids)
-		return
+		return c.checkNetworkSnapshot(pids)
 	}
 	owners := map[string][]int{}
 	for pid, identity := range pids {
 		if err := c.ctx.Err(); err != nil {
 			c.gap("socket owner scan", err)
-			return
+			return nil
 		}
 		dir := c.path(fmt.Sprintf("/proc/%d", pid))
 		ns, known := pidNamespaces[pid]
@@ -208,13 +288,25 @@ func (c *collector) networkWithReadlink(readlink func(string) (string, error)) {
 			owners[inode] = append(owners[inode], pid)
 		}
 	}
+	if err := c.ctx.Err(); err != nil {
+		c.gap("socket owner scan", err)
+		return nil
+	}
 	for _, ns := range keys {
+		if err := c.ctx.Err(); err != nil {
+			c.gap("socket owner snapshot", err)
+			return nil
+		}
 		if !invalid[ns] {
 			checkRepresentative(ns, "after socket owner snapshot")
 		}
 	}
+	if err := c.ctx.Err(); err != nil {
+		c.gap("socket owner snapshot", err)
+		return nil
+	}
 	for _, peer := range peers {
-		if invalid[peer.Namespace] {
+		if !validated[peer.Namespace] || invalid[peer.Namespace] {
 			continue
 		}
 		for _, pid := range owners[peer.Inode] {
@@ -225,7 +317,8 @@ func (c *collector) networkWithReadlink(readlink func(string) (string, error)) {
 		sort.Ints(peer.PIDs)
 		c.o.NetworkPeers = append(c.o.NetworkPeers, peer)
 	}
-	c.checkNetworkSnapshot(pids)
+	published = true
+	return c.checkNetworkSnapshot(pids)
 }
 
 func (c *collector) networkIdentity(dir string) (string, error) {
@@ -280,10 +373,19 @@ func (c *collector) networkProcesses() map[int]string {
 	return result
 }
 
-func (c *collector) checkNetworkSnapshot(before map[int]string) {
-	for pid, identity := range c.networkProcesses() {
+func (c *collector) checkNetworkSnapshot(before map[int]string) []string {
+	var churn []string
+	after := c.networkProcesses()
+	for pid, identity := range after {
 		if previous, ok := before[pid]; !ok || previous != identity {
-			c.gap("network snapshot", fmt.Errorf("PID %d appeared or changed during scan; repeat observation required", pid))
+			churn = append(churn, fmt.Sprintf("network snapshot: PID %d appeared or changed during scan; repeat observation required", pid))
 		}
 	}
+	for pid := range before {
+		if _, ok := after[pid]; !ok {
+			churn = append(churn, fmt.Sprintf("network snapshot: PID %d disappeared during scan; repeat observation required", pid))
+		}
+	}
+	sort.Strings(churn)
+	return churn
 }

@@ -47,6 +47,7 @@ type Coverage struct {
 	Skipped   int  `json:"skipped"`
 }
 type Report struct {
+	MappingViews []MappingViewObservation  `json:"mapping_identity_views,omitempty"`
 	SharedMemory []SharedMemoryObservation `json:"shared_memory,omitempty"`
 	Timestamp    time.Time                 `json:"timestamp"`
 	Hostname     string                    `json:"hostname,omitempty"`
@@ -108,9 +109,17 @@ type MissingPAMReference struct {
 	Config, Type, Control, Module string
 }
 type MappingObservation struct {
+	Source                               string
 	Kind, Device, Inode                  string
 	ObjectID, Address, Permissions, Path string
 	Deleted                              bool
+}
+type MappingViewObservation struct {
+	Source         string `json:"source"`
+	Path           string `json:"path"`
+	MapsDevice     string `json:"maps_device"`
+	MapsInode      string `json:"maps_inode"`
+	OpenedIdentity string `json:"opened_identity"`
 }
 type ProcessObservation struct {
 	PID                  int
@@ -125,6 +134,7 @@ type ProcessObservation struct {
 	Mappings             []MappingObservation
 }
 type Observations struct {
+	MappingViews   []MappingViewObservation
 	Timestamp      time.Time
 	Hostname       string
 	Coverage       Coverage
@@ -143,6 +153,7 @@ type Observations struct {
 // reverse-engineering identifications. Two active exact components are required.
 func Evaluate(o Observations) Report {
 	r := Report{Timestamp: o.Timestamp, Hostname: o.Hostname, Coverage: o.Coverage, Findings: []Finding{}}
+	r.MappingViews = append([]MappingViewObservation(nil), o.MappingViews...)
 	if r.Timestamp.IsZero() {
 		r.Timestamp = time.Now().UTC()
 	}
@@ -156,6 +167,9 @@ func Evaluate(o Observations) Report {
 	daemonPayload := false
 	add := func(id, title string, level Level, detail string) {
 		r.Findings = append(r.Findings, Finding{id, title, level, detail})
+	}
+	if len(o.MappingViews) > 0 {
+		add("mapping_identity_views", "Mapped files verified through kernel handles despite differing inode views", LevelInfo, fmt.Sprintf("observations=%d; mappings and opened identities retained in structured report", len(o.MappingViews)))
 	}
 	for _, x := range o.Objects {
 		objects[x.ID] = x

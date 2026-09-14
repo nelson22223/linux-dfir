@@ -67,13 +67,14 @@ func preflightELF(raw io.ReaderAt, size int64) error {
 	var off uint64
 	var programOff uint64
 	var programCount, programEntry uint16
-	var count, entry uint16
+	var count, entry, namesIndex uint16
 	minimum := uint16(40)
 	switch hdr[4] {
 	case 1:
 		off = uint64(order.Uint32(hdr[32:]))
 		entry = order.Uint16(hdr[46:])
 		count = order.Uint16(hdr[48:])
+		namesIndex = order.Uint16(hdr[50:])
 		programOff = uint64(order.Uint32(hdr[28:]))
 		programEntry = order.Uint16(hdr[42:])
 		programCount = order.Uint16(hdr[44:])
@@ -84,6 +85,7 @@ func preflightELF(raw io.ReaderAt, size int64) error {
 		off = order.Uint64(hdr[40:])
 		entry = order.Uint16(hdr[58:])
 		count = order.Uint16(hdr[60:])
+		namesIndex = order.Uint16(hdr[62:])
 		minimum = 64
 		programOff = order.Uint64(hdr[32:])
 		programEntry = order.Uint16(hdr[54:])
@@ -142,8 +144,10 @@ func preflightELF(raw io.ReaderAt, size int64) error {
 			position = uint64(order.Uint32(h[16:]))
 			length = uint64(order.Uint32(h[20:]))
 		}
-		if elf.SectionFlag(flags)&elf.SHF_COMPRESSED != 0 || length > uint64(maxObject) {
-			return fmt.Errorf("oversized or compressed ELF section")
+		// NewFile calls Data on the section-name table before returning. Other
+		// compressed sections only have their fixed-size compression header read.
+		if namesIndex != 0 && i == uint64(namesIndex) && elf.SectionFlag(flags)&elf.SHF_COMPRESSED != 0 {
+			return fmt.Errorf("compressed ELF section name table")
 		}
 		if typ != elf.SHT_NOBITS && (position > uint64(size) || length > uint64(size)-position) {
 			return fmt.Errorf("ELF section outside file")
@@ -223,8 +227,22 @@ func parseELF(raw io.ReaderAt, size int64) (elfFacts, error) {
 		if s.Type != elf.SHT_NOBITS && (s.Offset > uint64(size) || s.FileSize > uint64(size)-s.Offset) {
 			return facts, fmt.Errorf("ELF section outside file")
 		}
-		if s.Size > uint64(maxObject) || s.Flags&elf.SHF_COMPRESSED != 0 {
-			return facts, fmt.Errorf("unsupported oversized/compressed ELF section")
+	}
+	// DynamicSymbols reads the first DYNSYM, its linked string table and GNU
+	// version sections. Never let those Data calls decompress untrusted input,
+	// including the legacy name-triggered .zdebug path in Section.Open.
+	if dyn := f.SectionByType(elf.SHT_DYNSYM); dyn != nil {
+		if dyn.Link == 0 || uint64(dyn.Link) >= uint64(len(f.Sections)) || f.Sections[dyn.Link].Type != elf.SHT_STRTAB {
+			return facts, fmt.Errorf("invalid ELF dynamic string table link")
+		}
+		consumed := []*elf.Section{dyn, f.Sections[dyn.Link]}
+		if vs := f.SectionByType(elf.SHT_GNU_VERSYM); vs != nil {
+			consumed = append(consumed, vs, f.SectionByType(elf.SHT_GNU_VERDEF), f.SectionByType(elf.SHT_GNU_VERNEED))
+		}
+		for _, s := range consumed {
+			if s != nil && (s.Size > uint64(maxObject) || s.Flags&elf.SHF_COMPRESSED != 0 || strings.HasPrefix(s.Name, ".zdebug")) {
+				return facts, fmt.Errorf("unsupported oversized/compressed ELF dynamic metadata")
+			}
 		}
 	}
 	syms, err := f.DynamicSymbols()
