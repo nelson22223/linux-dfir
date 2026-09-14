@@ -1,5 +1,7 @@
 # Linux DFIR Collector
 
+本工作分支包含 DDEI 专用检测增强。DDEI 默认先检测，再采集六模块；用法、判定规则和输出位置见 [DDEI 中文说明](doc/DDEI_ROOTKIT_DETECTOR.md)。下文通用采集器说明不覆盖专用检测的判定契约。
+
 Go-based one-shot Linux incident response collector inspired by the original ATTK collection surface. It produces two parallel outputs:
 
 - `legacy/`: ATTK-style human-readable files for responders.
@@ -192,12 +194,10 @@ Pending Linux VM validation:
 
 ---
 
-## Branch: ddei-rootkit-detector
+## DDEI 专用检测
 
-Customized build for the **libnet.so/xinetd LD_PRELOAD rootkit family** (Trend Micro DDEI
-appliance incident, 2026-09). Default execution runs the family detector first — terminal
-verdict, same-directory log, scriptable exit code — then collects and archives using the
-slim `ddei` profile. Original profiles (`deep`, `quick`, `standard`, ...) remain available.
+默认运行精确 IOC 与行为关联检测，再用精简 ddei profile 采集并打包。
+控制台、专用日志及 legacy/ddei_rootkit/report.txt 提供人读结果，AI JSONL 继续只保存采集事实。
 
 ```sh
 ./dfir-collector                 # detect (verdict + log) + focused collection + tar.gz
@@ -205,6 +205,6 @@ slim `ddei` profile. Original profiles (`deep`, `quick`, `standard`, ...) remain
 ./dfir-collector -no-detect -profile deep   # original full collection
 ```
 
-Exit codes: 0 clean, 1 review needed, 3 host compromised.
-Detector internals and the full case analysis (intrusion timeline, IOCs, evidence-to-collector
-mapping): see [doc/DDEI_ROOTKIT_DETECTOR.md](doc/DDEI_ROOTKIT_DETECTOR.md).
+DDEI 退出码：0 CLEAN、3 INFECTED、2 INCONCLUSIVE 或执行失败。没有命中 hash/IP 不能单独判白。
+no-detect 普通采集错误仍为 1。其他 profile 需要对应配置文件。
+完整规则、测试边界和输出位置见 [DDEI 中文说明](doc/DDEI_ROOTKIT_DETECTOR.md)。

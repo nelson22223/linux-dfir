@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,59 +29,102 @@ const (
 	defaultMode    = string(output.ModeDual)
 )
 
-// detectorExitCode carries the DDEI rootkit verdict to the process exit code
-// (0 clean, 1 suspicious, 2 likely, 3 infected) so responders can script on it.
+// Execution failures override the verdict's exit code, not the report itself.
 var detectorExitCode int
+
+var errorExitCode = 2
+
+// ErrorExitCode preserves the legacy failure contract when detection is disabled.
+func ErrorExitCode() int { return errorExitCode }
+
+var runDetector = ddeirootkit.RunContext
+
+type runStatus struct {
+	Detection  string
+	Collection string
+}
+
+var lastRun runStatus
 
 // ExitCode returns the detector-driven exit code (0 when detection was
 // skipped or the host is clean).
 func ExitCode() int { return detectorExitCode }
 
 type Config struct {
-	CleanMode   string
-	OutputDir   string
-	Profile     string
-	ProfileDir  string
-	Scan        string
-	Timeout     string
-	DetectOnly  bool
-	NoDetect    bool
-	DetectorLog string
+	CleanMode          string
+	OutputDir          string
+	Profile            string
+	ProfileDir         string
+	Scan               string
+	Timeout            string
+	DetectOnly         bool
+	NoDetect           bool
+	DetectorLog        string
+	ProfileDirExplicit bool
 }
 
-func Run(ctx context.Context, args []string) error {
-	_ = ctx
+func Run(ctx context.Context, args []string) (runErr error) {
+	detectorExitCode = 0
+	errorExitCode = 2
+	lastRun = runStatus{Detection: "未执行", Collection: "未执行"}
+	defer func() {
+		execution := "完成"
+		if errors.Is(runErr, flag.ErrHelp) {
+			return
+		}
+		if runErr != nil {
+			execution = "失败"
+			detectorExitCode = ErrorExitCode()
+			if lastRun.Collection == "进行中" {
+				lastRun.Collection = "失败"
+			}
+		}
+		fmt.Printf("执行状态：%s；检测=%s；采集=%s；退出码=%d\n", execution, lastRun.Detection, lastRun.Collection, detectorExitCode)
+	}()
 
 	cfg, err := parseArgs(args)
+	if cfg.NoDetect {
+		errorExitCode = 1
+	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
 
 	if err := validateConfig(cfg); err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
 	cfg.Scan = strings.ToLower(cfg.Scan)
 	cfg.CleanMode = strings.ToLower(cfg.CleanMode)
+	runCtx, cancel, scannerTimeout := optionalTimeoutContext(ctx, cfg.Timeout)
+	defer cancel()
 
 	// The detector runs before anything that touches the profile system so a
 	// standalone binary on a victim host always produces a verdict even when
 	// no profiles/ directory ships next to the executable.
 	var detectorReport *ddeirootkit.Report
 	if !cfg.NoDetect {
-		rep := ddeirootkit.Run(ddeirootkit.Options{
+		rep := runDetector(runCtx, ddeirootkit.Options{
 			ScanProcMaps: true,
 		})
 		detectorReport = &rep
+		lastRun.Detection = string(rep.Verdict)
+		detectorExitCode = ddeirootkit.ExitCode(rep.Verdict)
+		if !rep.Complete {
+			if rep.Verdict != ddeirootkit.VerdictInfected {
+				detectorExitCode = 2
+			}
+			lastRun.Detection += "（覆盖不完整）"
+		}
 		ddeirootkit.Print(rep, os.Stdout)
 		logPath, logErr := ddeirootkit.WriteLog(rep, cfg.DetectorLog)
 		if logErr != nil {
-			fmt.Fprintf(os.Stderr, "detector log write failed: %v\n", logErr)
+			return fmt.Errorf("检测日志写入失败: %w", logErr)
 		} else {
-			fmt.Printf("detector log: %s\n", logPath)
+			fmt.Printf("检测日志已保存：%s\n", logPath)
 		}
-		detectorExitCode = ddeirootkit.ExitCode(rep.Verdict)
+		if err := runCtx.Err(); err != nil {
+			return fmt.Errorf("检测执行中断: %w", err)
+		}
 		if cfg.DetectOnly {
 			return nil
 		}
@@ -88,21 +132,17 @@ func Run(ctx context.Context, args []string) error {
 
 	profileDef, err := loadProfileOrDefault(cfg)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
 	logs.Configure(logs.Options{JournalMaxLines: profileDef.Limits.JournalMaxLines})
-	runCtx, cancel, scannerTimeout := optionalTimeoutContext(ctx, cfg.Timeout)
-	defer cancel()
+	lastRun.Collection = "进行中"
 
 	sess, err := session.New("", time.Now().UTC())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
 	out, err := output.New(cfg.OutputDir, defaultMode, sess)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		return err
 	}
 
@@ -139,6 +179,9 @@ func Run(ctx context.Context, args []string) error {
 			return err
 		}
 		finalCollectors = appendIfMissing(finalCollectors, "detector")
+		if err := out.WriteLegacy("ddei_rootkit/report.txt", []byte(ddeirootkit.Text(*detectorReport)), "detector"); err != nil {
+			return err
+		}
 	}
 	registry := collectors.Registry()
 	for _, collectorName := range profileDef.Collectors {
@@ -234,7 +277,8 @@ func Run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	fmt.Printf("linux-dfir collector initialized\n")
+	lastRun.Collection = "已完成"
+	fmt.Printf("采集及归档已完成\n")
 	fmt.Printf("session=%s profile=%s collectors=%s output_mode=%s output=%s scan=%s clean=%s\n",
 		sess.SessionID, profileDef.Name, strings.Join(finalCollectors, ","), defaultMode, cfg.OutputDir, cfg.Scan, cfg.CleanMode)
 	return nil
@@ -255,6 +299,7 @@ func parseArgs(args []string) (Config, error) {
 	}
 
 	fs := flag.NewFlagSet("dfir-collector", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.CleanMode, "clean", cfg.CleanMode, "clean mode: disabled, confirm, force")
 	fs.StringVar(&cfg.OutputDir, "output", cfg.OutputDir, "output directory")
 	fs.StringVar(&cfg.Profile, "profile", cfg.Profile, "collection profile name under --profile-dir")
@@ -266,8 +311,17 @@ func parseArgs(args []string) (Config, error) {
 	fs.StringVar(&cfg.DetectorLog, "detector-log-dir", "", "directory for the detector log file (default: directory of the executable)")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fs.SetOutput(os.Stdout)
+			fs.PrintDefaults()
+		}
 		return cfg, err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "profile-dir" {
+			cfg.ProfileDirExplicit = true
+		}
+	})
 	return cfg, nil
 }
 
@@ -283,10 +337,13 @@ func loadProfileOrDefault(cfg Config) (profile.Definition, error) {
 	if err == nil {
 		return def, nil
 	}
-	if cfg.Profile != defaultProfile {
+	if cfg.Profile != defaultProfile || cfg.ProfileDirExplicit || cfg.ProfileDir != "profiles" || !errors.Is(err, os.ErrNotExist) {
 		return profile.Definition{}, err
 	}
-	fmt.Fprintf(os.Stderr, "warning: %v — using built-in %s profile\n", err, defaultProfile)
+	if _, statErr := os.Lstat(filepath.Join(cfg.ProfileDir, cfg.Profile+".yaml")); !errors.Is(statErr, os.ErrNotExist) {
+		return profile.Definition{}, err
+	}
+	fmt.Fprintf(os.Stderr, "默认配置文件缺失，使用内置 %s 配置\n", defaultProfile)
 	return profile.Definition{
 		Name:        defaultProfile,
 		Description: "built-in DDEI triage profile (detector output plus supporting artifacts)",
@@ -300,6 +357,9 @@ func loadProfileOrDefault(cfg Config) (profile.Definition, error) {
 }
 
 func validateConfig(cfg Config) error {
+	if cfg.DetectOnly && cfg.NoDetect {
+		return errors.New("--detect-only 与 --no-detect 不能同时使用")
+	}
 	if cfg.OutputDir == "" {
 		return errors.New("output directory is required")
 	}

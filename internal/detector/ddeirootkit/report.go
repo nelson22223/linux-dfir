@@ -2,89 +2,100 @@ package ddeirootkit
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// Print renders the report to the terminal in a responder-friendly layout.
-func Print(rep Report, w *os.File) {
-	fmt.Fprintln(w, "====== DDEI Rootkit Detector (linux-dfir/ddei-rootkit-detector) ======")
-	fmt.Fprintf(w, "host=%s time=%s family=%s\n", rep.Hostname, rep.Timestamp.Format(time.RFC3339), FamilyName)
-	fmt.Fprintln(w, "----------------------------------------------------------------------")
-	if len(rep.Findings) == 0 {
-		fmt.Fprintln(w, "no checks produced results")
-	}
-	for _, f := range rep.Findings {
-		fmt.Fprintf(w, "[%s] %s\n", f.Level, f.Title)
-		if f.Detail != "" {
-			fmt.Fprintf(w, "        %s\n", f.Detail)
-		}
-	}
-	if len(rep.ProcHits) > 0 {
-		fmt.Fprintln(w, "----------------------------------------------------------------------")
-		fmt.Fprintln(w, "processes with family artifacts mapped:")
-		for _, h := range rep.ProcHits {
-			fmt.Fprintf(w, "  pid=%-7d comm=%-12s exe=%s %s\n", h.PID, h.Comm, h.Exe, h.Note)
-		}
-	}
-	fmt.Fprintln(w, "======================================================================")
-	switch rep.Verdict {
-	case VerdictInfected:
-		fmt.Fprintf(w, "VERDICT: *** HOST COMPROMISED *** — %s\n", rep.Summary)
-		fmt.Fprintln(w, "Isolate the host, image the disk, rebuild; treat all local tool output as untrusted.")
-	case VerdictReview:
-		fmt.Fprintf(w, "VERDICT: REVIEW — %s\n", rep.Summary)
-		fmt.Fprintln(w, "No decisive family indicator; inspect the soft findings above before clearing this host.")
-	default:
-		fmt.Fprintf(w, "VERDICT: CLEAN — %s\n", rep.Summary)
-	}
-}
-
-// WriteLog persists a plain-text report into dir (defaults to the directory
-// of the running executable). It returns the log path.
-func WriteLog(rep Report, dir string) (string, error) {
-	if dir == "" {
-		if exe, err := os.Executable(); err == nil {
-			dir = filepath.Dir(exe)
-		} else {
-			dir, _ = os.Getwd()
-		}
-	}
-	name := fmt.Sprintf("ddei_rootkit_check_%s.log", rep.Timestamp.Format("20060102T150405Z"))
-	path := filepath.Join(dir, name)
+// Text renders the same human report for console, log, and archive.
+func Text(rep Report) string {
 	var b strings.Builder
-	b.WriteString("# DDEI rootkit detector report\n")
-	fmt.Fprintf(&b, "timestamp=%s\nhost=%s\nfamily=%s\nverdict=%s\nsummary=%s\n\n",
-		rep.Timestamp.Format(time.RFC3339), rep.Hostname, FamilyName, rep.Verdict, rep.Summary)
+	fmt.Fprintf(&b, "DDEI Rootkit 检测\n主机：%s\n时间：%s\n家族：%s\n", rep.Hostname, rep.Timestamp.Format(time.RFC3339), FamilyName)
+	coverage := "已完成请求的检查（仅限检测器覆盖范围，不代表主机整体安全）"
+	if !rep.Complete {
+		coverage = "检查未完成或覆盖不足，不能据此排除感染"
+	}
+	fmt.Fprintf(&b, "完成/覆盖：%s\n判定：%s\n摘要：%s\n", coverage, rep.Verdict, rep.Summary)
+	fmt.Fprintf(&b, "覆盖记录：root=%t proc=%t 进程=%d 对象=%d 错误=%d 跳过=%d\n",
+		rep.Coverage.Root, rep.Coverage.Proc, rep.Coverage.Processes, rep.Coverage.Objects, rep.Coverage.Errors, rep.Coverage.Skipped)
+	if len(rep.Findings) == 0 {
+		b.WriteString("未发现需标记的指标\n")
+	}
 	for _, f := range rep.Findings {
 		fmt.Fprintf(&b, "[%s] %s\n", f.Level, f.Title)
 		if f.Detail != "" {
-			fmt.Fprintf(&b, "        %s\n", f.Detail)
+			fmt.Fprintf(&b, "  %s\n", f.Detail)
 		}
 	}
-	if len(rep.ProcHits) > 0 {
-		b.WriteString("\nprocess_hits:\n")
-		for _, h := range rep.ProcHits {
-			fmt.Fprintf(&b, "  pid=%d comm=%s exe=%s %s\n", h.PID, h.Comm, h.Exe, h.Note)
+	for _, h := range rep.ProcHits {
+		fmt.Fprintf(&b, "进程：pid=%d comm=%s exe=%s %s\n", h.PID, h.Comm, h.Exe, h.Note)
+	}
+	switch rep.Verdict {
+	case VerdictInfected:
+		b.WriteString("发现感染证据；请隔离主机并保全证据。\n")
+	case VerdictClean:
+		if rep.Complete {
+			b.WriteString("覆盖范围内未发现家族指标。\n")
 		}
+	default:
+		b.WriteString("结论不充分，需要进一步核查；不是 CLEAN。\n")
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
-		return "", err
-	}
-	return path, nil
+	return b.String()
 }
 
-// ExitCode maps the verdict onto a scriptable process exit code:
-// 0 clean, 1 review needed, 3 compromised.
+func Print(rep Report, w io.Writer) { fmt.Fprint(w, Text(rep)) }
+
+// WriteLog exclusively creates a private log, never truncating existing files.
+func WriteLog(rep Report, dir string) (string, error) {
+	if dir == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("定位可执行文件目录: %w", err)
+		}
+		dir = filepath.Dir(exe)
+	} else if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", err
+	}
+	base := "ddei_rootkit_check_" + rep.Timestamp.UTC().Format("20060102T150405Z")
+	for n := 0; n < 10000; n++ {
+		name := base + ".log"
+		if n > 0 {
+			name = fmt.Sprintf("%s_%d.log", base, n)
+		}
+		path := filepath.Join(dir, name)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, writeErr := io.WriteString(f, Text(rep))
+		if writeErr == nil {
+			writeErr = f.Sync()
+		}
+		closeErr := f.Close()
+		if writeErr != nil {
+			return "", writeErr
+		}
+		if closeErr != nil {
+			return "", closeErr
+		}
+		return path, nil
+	}
+	return "", fmt.Errorf("检测日志文件名冲突过多: %s", dir)
+}
+
+// ExitCode maps unknown and legacy REVIEW outcomes conservatively to 2.
 func ExitCode(v Verdict) int {
 	switch v {
 	case VerdictInfected:
 		return 3
-	case VerdictReview:
-		return 1
-	default:
+	case VerdictClean:
 		return 0
+	default:
+		return 2
 	}
 }

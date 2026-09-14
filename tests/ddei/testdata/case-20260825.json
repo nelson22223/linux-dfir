@@ -1,0 +1,102 @@
+{
+  "provenance": {
+    "archive_sha256": "43c0ea6c82e7d93fd31cc879f9f7da0e02d68c0c82337b22f3e12aa8b3f5b800",
+    "description": "Minimal field projection from verified original evidence.jsonl. No binaries, credentials, host identifiers or local network addresses. Includes the confirmed remote IOC. Historical observation replay, not live sample execution."
+  },
+  "records": [
+    {
+      "line": 13985,
+      "stream": "facts/persistence_items",
+      "source_path": "/etc/ld.so.preload",
+      "data": {
+        "item_type": "ld_so_preload_entry",
+        "path": "/etc/ld.so.preload",
+        "target_exists": true,
+        "target_path": "/usr/lib64/libnet.so",
+        "target_sha256": "96336e90dce02fc7524873dca3c3e5556bf93dba86cafc75ad874b2f97f079c3"
+      }
+    },
+    {
+      "line": 14135,
+      "stream": "facts/pam_persistence",
+      "source_path": "/etc/pam.d/password-auth",
+      "data": {
+        "pam_type": "auth",
+        "module_path_resolved": "/lib64/security/pam_ssh.so",
+        "module_file_exists": true,
+        "module_file_sha256": "82e9ebd1455fb44e633aa22dfc234b24ad45ef22053cc99944a8b2bca6b40957",
+        "control": "[success=1 default=ignore]"
+      }
+    },
+    {
+      "line": 14136,
+      "stream": "facts/pam_persistence",
+      "source_path": "/etc/pam.d/password-auth",
+      "data": {
+        "pam_type": "auth",
+        "module_path_resolved": "/lib64/security/pam_ssh.so",
+        "module_file_exists": true,
+        "module_file_sha256": "82e9ebd1455fb44e633aa22dfc234b24ad45ef22053cc99944a8b2bca6b40957",
+        "control": "[success=done default=ignore]"
+      }
+    },
+    {
+      "line": 1577,
+      "stream": "facts/process_lineage",
+      "source_path": "/proc/48989",
+      "data": {
+        "pid": 48989,
+        "exe": "/usr/sbin/xinetd",
+        "exe_sha256": "f8d7f90ce69e31ff7a8e04bd60af0475044a03ca854a54ae86bc0b7eb198d374",
+        "exe_size": 5966192
+      }
+    },
+    {
+      "line": 1118,
+      "stream": "entities/process",
+      "source_path": "/proc/120084",
+      "data": {
+        "pid": 120084,
+        "exe": "/usr/bin/bash",
+        "maps": {
+          "exists": true,
+          "sample_paths": ["/usr/lib64/libnet.so"]
+        }
+      }
+    },
+    {
+      "line": 1075,
+      "stream": "entities/process",
+      "source_path": "/proc/48989",
+      "data": {
+        "pid": 48989,
+        "exe": "/usr/sbin/xinetd",
+        "uid": 0,
+        "ppid": 1,
+        "fds": [
+          {"exists": true, "fd": "4", "target": "/dev/ptmx", "type": "file"},
+          {"exists": true, "fd": "5", "target": "/dev/ptmx", "type": "file"}
+        ],
+        "maps": {
+          "exists": true,
+          "writable_executable_count": 1
+        }
+      }
+    },
+    {
+      "line": 2587,
+      "stream": "facts/network_flows",
+      "source_path": "/proc/net",
+      "data": {
+        "socket": {
+          "remote_address": "14.116.197.139",
+          "remote_port": 25,
+          "state": "SYN_SENT",
+          "protocol": "tcp",
+          "inode": "540906492"
+        },
+        "process_owners": [{"pid": 56868}]
+      }
+    }
+  ]
+}
